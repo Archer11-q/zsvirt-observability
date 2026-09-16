@@ -30,8 +30,8 @@
 | 依赖 | 版本 | 安装方式 | 状态 |
 |---|---|---|---|
 | Git | ≥ 2.40（勘测机 2.53.0） | 系统包 | ✅ |
-| Python | **3.12.x**（勘测机为 3.14.4 ⚠️） | `deadsnakes` PPA / `pyenv` / 系统包 | 【待确认】 |
-| pip / venv | 随 Python | `python3 -m venv` | ⚠️ 勘测机 `pip3` 缺失 |
+| Python | **3.12.x（已锁定）** | pyenv / 源码编译到 `~/.local`，或 deadsnakes PPA | ⚠️ 勘测机默认 3.14.4，**需另装 3.12 并存**【安装方式待确认】 |
+| pip / venv | 随 Python | `python3.12 -m venv` | ⚠️ 勘测机 `pip3` 缺失 |
 | PostgreSQL | 【待确认】建议 16.x | 系统包 / 容器 | ❌ 未安装 |
 | ZSvirt 集群访问 | 【阻塞】版本与凭据未知 | 成员提供 | ❌ 未知 |
 
@@ -46,9 +46,11 @@
 git clone git@github.com:Archer11-q/zsvirt-observability.git
 cd zsvirt-observability
 
-# 2. 创建虚拟环境（Python 版本以 TECH-BASELINE.md 锁定值为准）
-python3 -m venv .venv
+# 2. 创建虚拟环境（Python 已锁定 3.12.x，见 docs/TECH-BASELINE.md §2.1）
+#    注意：勘测机默认 python3 是 3.14，必须显式使用 3.12
+python3.12 -m venv .venv
 source .venv/bin/activate
+python -V   # 必须是 3.12.x
 
 # 3. 安装依赖 【待确认：requirements.txt 尚未生成】
 pip install -r requirements.txt
@@ -120,7 +122,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 
 1. 本机 Docker 不可用（Docker Desktop WSL 集成未开启）——是否影响交付待定。
 2. 本机 PostgreSQL 未安装。
-3. 本机 Python 版本（3.14.4）与锁定基线（3.12）不一致。
+3. 本机默认 Python 为 3.14.4，**项目已锁定 3.12**，需另装 3.12 并保持并存（安装方式待确认）。
 4. 本机 `pip3` 缺失。
 5. ZSvirt 集群接入方式与凭据未知——**阻塞 B1 设计落地**。
 
@@ -131,3 +133,4 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 | 版本 | 日期 | 变更 | 状态 |
 |---|---|---|---|
 | v0.1 | 2026-09-16 | 骨架：环境要求、搭建步骤草案、配置项草案、阻塞清单 | DRAFT |
+| v0.2 | 2026-09-16 | 按成员决策更新：Python 明确锁定 3.12.x，搭建步骤改为显式使用 `python3.12` | DRAFT |

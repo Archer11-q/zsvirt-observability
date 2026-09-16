@@ -69,10 +69,17 @@ Testing/
 .cache/
 
 # ============================================================
-# ZSvirt Observability — additions
-# NOTE: the block above this line is the GitHub C/C++ + CMake template.
-#       It is kept for reference; the backend baseline is Python (see docs/TECH-BASELINE.md).
-#       Rewriting/removing the C/C++ block requires agreement from all members.
+# ZSvirt Observability
+#
+# This file intentionally covers BOTH toolchains:
+#
+#   backend/    Python          (member B — see docs/TECH-BASELINE.md)
+#   agents/     C / C++ / CMake (member A — language not yet decided)
+#   frontend/   Node / npm      (member C)
+#
+# The C/C++ + CMake block above is KEPT, not legacy: member A's in-VM probe may
+# be written in C or C++, and that decision is not yet made. Do not remove it.
+# If member A confirms C will not be used, revisit this file with all members.
 # ============================================================
 
 # --- internal / non-product material (never shipped) ---
@@ -100,6 +107,14 @@ env/
 .mypy_cache/
 .coverage
 htmlcov/
+
+# --- Node / npm (member C, frontend) ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-store/
+next-env.d.ts
+*.tsbuildinfo
 
 # --- secrets & local config (never commit credentials) ---
 .env
