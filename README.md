@@ -55,6 +55,13 @@ feature/member-c/*   # 成员 C：前端展示
 
 禁止直接在 `main` / `develop` 上开发，禁止 force push。
 
+## 协作
+
+三位成员的协作流程、分支规则、接口契约纪律与仓库清洁红线见
+[CONTRIBUTING.md](CONTRIBUTING.md)。**首次参与前请先读它。**
+
+---
+
 ## 许可证
 
 见 [LICENSE](LICENSE)。
