@@ -67,3 +67,54 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# ============================================================
+# ZSvirt Observability — additions
+# NOTE: the block above this line is the GitHub C/C++ + CMake template.
+#       It is kept for reference; the backend baseline is Python (see docs/TECH-BASELINE.md).
+#       Rewriting/removing the C/C++ block requires agreement from all members.
+# ============================================================
+
+# --- internal / non-product material (never shipped) ---
+.project-internal/
+*.docx
+*.doc
+
+# --- IDE ---
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- secrets & local config (never commit credentials) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!id_*.pub
+
+# --- local data / dumps ---
+*.sqlite3
+*.db
+*.dump
+
+# --- Windows / WSL metadata ---
+*:Zone.Identifier
+Thumbs.db
+desktop.ini
