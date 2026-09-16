@@ -29,6 +29,20 @@
 | [docs/backend/DIAGNOSIS_DESIGN.md](docs/backend/DIAGNOSIS_DESIGN.md) | 诊断引擎与故障场景设计 |
 | [docs/ADR/](docs/ADR/) | 架构决策记录 |
 
+## 仓库结构
+
+多模块单仓库（monorepo），三位成员按目录并行开发。
+
+```text
+├── backend/    后端平台、资源关联、告警、根因诊断   （成员 B）
+├── agents/     ZSvirt 虚拟机内探针与数据采集        （成员 A）
+├── frontend/   可视化展示                          （成员 C）
+├── deploy/     部署脚本、配置样例、故障注入脚本      （三方共同）
+└── docs/       项目真源文档：架构 / 数据模型 / API 契约 / 兼容性 / 部署 / 测试
+```
+
+各模块的实现范围与对外契约见对应目录下的 `README.md`。
+
 ## 分支约定
 
 ```
