@@ -15,13 +15,16 @@
 > 把宿主机、GPU/vGPU、虚拟机、容器、AI 服务与 Agent 的分散信号关联成一条可解释的证据链。
 > 仓库名保持 `zsvirt-observability`，以便按赛道关键词检索。
 >
-> **状态：设计阶段。** 本仓库当前只有设计文档，尚未开始实现。
-> 所有设计文档均为 DRAFT，需团队评审后才能作为实现依据。
+> **状态：实现阶段（后端已可运行）。** 设计已定稿并完成**契约冻结**（A、C 均签字，
+> 见 [docs/CONTRACT_FREEZE.md](docs/CONTRACT_FREEZE.md)）；后端 **16 个契约端点全部落地**，
+> 测试 **406 通过 / 1 跳过**（真实 PostgreSQL 上运行）。探针与前端见各自目录的 README。
+> 剩余任务与验收标准见 **[docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)**。
 
 ## 文档
 
 | 文档 | 内容 |
 |---|---|
+| [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) | **开发路线图** —— 剩余任务、依赖关系与可执行的验收标准 |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | **决策登记表** —— 全部已冻结决策的唯一查阅入口 |
 | [docs/CONTRACT_FREEZE.md](docs/CONTRACT_FREEZE.md) | 契约冻结提案：待三方确认的枚举与码表 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构、分层、数据流、模块边界、设计优先级 |
@@ -72,6 +75,25 @@ export SIMULATED_DATA_ENABLED=true
 
 启动后 `GET /api/health` 的 `gpuProvider.mode` 显示当前数据渠道（`zsvirt-zwatch` / `guest-smi` / `simulated`）。
 **模拟数据可识别，不会伪装成真实采集数据。** 详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §4.1。
+
+## 快速验证（后端）
+
+```bash
+cd backend && source .venv/bin/activate
+python -m pytest -q                       # 406 passed, 1 skipped
+python -m uvicorn app.main:app --port 8080
+
+curl -s localhost:8080/api/health                       # 健康与降级状态
+curl -s localhost:8080/api/v1/dict                      # 枚举码表（含中文文案）
+curl -s localhost:8080/api/v1/workloads                 # AI 服务负载总览
+curl -s -X POST localhost:8080/api/v1/diagnoses \
+     -H 'content-type: application/json' \
+     -d '{"alertId":"alert_..."}'                       # 一键诊断（需先有告警）
+```
+
+交互式 API 文档：<http://localhost:8080/docs>
+
+> 环境搭建见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §3（Python 3.12 为源码编译，非系统包）。
 
 ## 仓库结构
 

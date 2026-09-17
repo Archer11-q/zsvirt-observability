@@ -31,5 +31,5 @@ def root() -> dict:
         "version": __version__,
         "docs": "/docs",
         "health": "/api/health",
-        "gpuProvider": ("simulated" if settings.simulated_data_enabled else settings.gpu_provider),
+        "gpuProvider": settings.gpu_provider_mode,
     }

@@ -140,16 +140,19 @@ def test_gpu_memory_exhausted_happy_path():
     assert result.rule_set_version == "rs-test-0.1.0"
     assert result.recommendation, "根因非 UNKNOWN 时必须给出处置建议"
 
-    # 跨层关联：证据自身（GPU / AI 服务）+ 其下游后代全部计入受影响范围，
-    # 覆盖 GPU→vGPU→VM→容器 整条链，这正是「跨层关联」能力的体现。
-    assert VGPU in result.affected_resources
-    assert VM in result.affected_resources
-    assert CTR in result.affected_resources
-
-    # 宿主机是锚点祖先且无证据 → 归 potentially_affected，不算"被影响"。
-    # 它提供了证据所在的层，但自身并未受影响；两者必须分开（C 要求 D-075）。
+    # 三集是可达集合的划分（D-075）：
+    #   affected  = 证据自身（VGPU）+ 证据的下游后代；锚点自身不计
+    #   on_chain  = 证据与锚点之间、无证据的过渡层（VM、CTR）
+    #   potentially_affected = 结构可达但离链的祖先（GPU / 宿主机）
+    assert set(result.affected_resources) == {VGPU}
+    assert set(result.on_chain) == {VM, CTR}
     assert HOST not in result.affected_resources
     assert HOST in result.potentially_affected
+    assert GPU in result.potentially_affected
+    # 锚点自身不出现在任何一集
+    assert AIS not in result.affected_resources
+    assert AIS not in result.on_chain
+    assert AIS not in result.potentially_affected
 
 
 def test_low_confidence_forces_unknown():

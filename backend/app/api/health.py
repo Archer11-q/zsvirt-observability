@@ -101,7 +101,7 @@ def health() -> HealthResponse:
         "gpuProvider": ComponentStatus(
             status="ok",
             detail={
-                "mode": "simulated" if settings.simulated_data_enabled else settings.gpu_provider,
+                "mode": settings.gpu_provider_mode,
                 "simulated": settings.simulated_data_enabled,
             },
         ),

@@ -12,9 +12,17 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Iterator
+from pathlib import Path
+
+# `tests/` 不是包（没有 `__init__.py`），因此它本身不在 `sys.path` 上，
+# `import _factories` 会在**收集阶段**就失败。这里显式加入。
+# 位置必须在业务 import 之前 —— conftest 是最早被加载的模块之一。
+sys.path.insert(0, str(Path(__file__).parent))
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -94,6 +102,40 @@ def db_session(db_engine: Engine) -> Iterator[Session]:
         # 清空连接池：应用侧与测试侧共用同一引擎，池中连接若带着上一个用例的
         # 事务快照，后续用例会读到陈旧状态（表现为"已提交的行查不到"）。
         db_engine.dispose()
+
+
+@pytest.fixture
+def client(db_engine: Engine) -> Iterator[TestClient]:
+    """指向**测试库**的 TestClient。
+
+    定义在这里而不是 `tests/factories.py`：pytest 只从 conftest 收集夹具，
+    放在普通模块里会得到 "fixture 'client' not found"。
+
+    用 `app.dependency_overrides[get_db]` 而不是 monkeypatch
+    `db.get_session_factory`：后者替换的是全局单例，会污染同批其他用例
+    （历史上踩过这个坑，症状是"已提交的行查不到"）。
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db import get_db
+    from app.ingest.limits import reset_metrics
+    from app.main import app
+
+    factory = sessionmaker(bind=db_engine, autoflush=False, expire_on_commit=False)
+
+    def _override_get_db() -> Iterator[Session]:
+        session = factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    reset_metrics()
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.fixture(autouse=True)

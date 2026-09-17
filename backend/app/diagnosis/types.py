@@ -188,6 +188,10 @@ class Diagnosis:
     confidence_breakdown: tuple[RuleHit, ...]
     affected_resources: tuple[str, ...] = ()
     potentially_affected: tuple[str, ...] = ()
+    #: 证据与锚点之间、干净父链上但无证据的过渡层。
+    #: 与 affected_resources / potentially_affected 三集互斥且不重叠，
+    #: 落库对应 diagnosis.on_chain，前端须分开渲染（D-075）。
+    on_chain: tuple[str, ...] = ()
     evidence: tuple[Evidence, ...] = ()
     recommendation: tuple[Recommendation, ...] = ()
     rule_set_version: str = ""

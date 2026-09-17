@@ -62,6 +62,22 @@ class Settings(BaseSettings):
         """按 docs/API_CONTRACT.md §4.9，认证默认关闭。"""
         return bool(self.api_auth_token.strip())
 
+    @property
+    def gpu_provider_mode(self) -> str:
+        """**对外的** GPU 数据渠道（`docs/API_CONTRACT.md` §4.8）。
+
+        配置为 `auto` 且开启了模拟数据时，对外必须报 `simulated` —— 这是
+        诚实性要求（`DATA_MODEL.md` §4.2.1）：前端要能一眼分辨"这些 GPU 数字
+        是真实采集的还是模拟出来的"。**在返回真实指标的地方报 simulated 是
+        可接受的，反过来才是错的**，所以判定顺序是先看模拟开关。
+
+        单一定义点：health / workloads / 将来的任何端点都读这里，
+        避免同一个标签在三处各算一遍而产生漂移。
+        """
+        if self.simulated_data_enabled:
+            return "simulated"
+        return self.gpu_provider
+
 
 @lru_cache
 def get_settings() -> Settings:

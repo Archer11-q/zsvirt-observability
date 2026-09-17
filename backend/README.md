@@ -20,15 +20,39 @@
 | 模块 | 状态 |
 |---|---|
 | `app/config.py` | ✅ 配置加载（环境变量 / `.env`，含 GPU Provider 与接入限制） |
-| `app/diagnosis/` | ✅ **诊断引擎已实现**：五步流程、规则求值、置信评分、影响范围传播 |
-| `app/api/health.py` | ✅ `GET /api/health`，**真实探测上游**（数据库 / ZSvirt / GPU Provider） |
-| `app/api/router.py` | 🔶 v1 业务路由已占位，端点待实现 |
-| `app/ingest/` | ⬜ 数据接入（等成员 A 的实现） |
-| `app/zsvirt/` | ⬜ ZSvirt 适配层（等命题方提供 API 文档） |
-| `app/normalize/` | ⬜ 标准化与脱敏 |
-| `app/graph/` | ⬜ 资源图 |
-| `app/events/` | ⬜ 事件存储 |
-| `app/alerts/` | ⬜ 告警引擎 |
+| `app/models.py` + `alembic/` | ✅ 6 张表 + 迁移（在全新库上验证 `upgrade` / `downgrade`） |
+| `app/enums.py` | ✅ 全部冻结码表的**唯一真源**（含中文文案），带一致性自检 |
+| `app/graph/` | ✅ 资源图：纯函数遍历（`algorithms.py`）+ 持久化 + 拓扑裁剪 |
+| `app/normalize/` | ✅ 资源 ID 拼装 + 脱敏管道（与探针共享 `shared/sensitive_vectors.json`） |
+| `app/events/` | ✅ 事件存储（只追加）+ keyset 游标分页 |
+| `app/ingest/` | ✅ `POST /api/v1/ingest/batch`（A 的 Q1–Q7 全部落地：幂等、限流、时钟漂移） |
+| `app/alerts/` | 🔶 状态机 / 静默 / 聚合计数 / 批量操作完成；**规则求值未做**（见 `../docs/DEVELOPMENT_PLAN.md` 任务 2） |
+| `app/diagnosis/` | ✅ 引擎（五步流程、规则求值、置信评分）+ **服务层（装配上下文 → 落库）** |
+| `app/api/` | ✅ **16 个契约端点全部落地**（见下） |
+| `app/zsvirt/` | ⬜ ZSvirt 适配层（等命题方提供 API 文档，见 `../docs/DECISIONS.md` §8） |
+
+**已实现端点**（`../docs/API_CONTRACT.md` §4.1 清单，由 OpenAPI schema 核对）：
+
+```
+GET  /api/health                            健康与降级（无版本前缀）
+POST /api/v1/ingest/batch                   接收 A 的探针上报
+GET  /api/v1/topology                       资源拓扑（可裁剪，truncated 标志）
+GET  /api/v1/dict                           枚举字典（含中文文案，ETag）
+GET  /api/v1/events                         事件查询（时间窗 / 资源 / 类型 / 严重级别）
+GET  /api/v1/events/{id}                    事件详情
+GET  /api/v1/events/{id}/related-alerts     反向链路：事件 → 采纳它的告警
+GET  /api/v1/alerts                         告警列表 + 状态 / 严重级别计数
+GET  /api/v1/alerts/{id}                    告警详情
+GET  /api/v1/alerts/{id}/evidence           展开证据事件（含缺失报告）
+POST /api/v1/alerts/{id}/actions            单条 ack / resolve / silence / unsilence
+POST /api/v1/alerts/actions                 批量状态操作（逐条报告）
+GET  /api/v1/workloads                      AI 服务负载总览（`ai_service` 聚合视图）
+GET  /api/v1/diagnoses                      诊断列表（游标分页 + 根因计数）
+GET  /api/v1/diagnosis/{id}                 诊断详情（`?includeEvidence=true` 内联证据事件）
+POST /api/v1/diagnoses                      手动触发诊断（`{alertId}` 或 `{anchorResourceId, window}`）
+```
+
+测试规模：**406 通过 / 1 跳过**（真实 PostgreSQL 测试库上运行），`ruff check` 全绿。
 
 ---
 

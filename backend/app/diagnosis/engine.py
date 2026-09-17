@@ -231,6 +231,7 @@ def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
         confidence_breakdown=tuple(by_cause[top_cause]),
         affected_resources=scope.affected,
         potentially_affected=scope.potentially_affected,
+        on_chain=scope.on_chain,
         evidence=tuple(relevant),
         recommendation=RECOMMENDATIONS.get(top_cause, ()),
         rule_set_version=ctx.rule_set.version,

@@ -130,8 +130,10 @@ class TestCleanParentChain:
 
 # ---------------------------------------------------------------- 链上过渡层
 
-# 实测：chain_intermediates 只在"证据位于锚点**下游**"时非空。
-# 证据在锚点上游时，到锚点的整条链已由 evidence 的下游闭包覆盖（见 impact_scope）。
+# chain_intermediates 必须**两个方向都处理**：锚点在链路末端（AI 服务）而证据
+# 在 GPU / 容器上，是本项目最常见的场景。只做"证据在锚点下游"那一半会让
+# `onChain` 在这种场景下恒为空，并把证据与锚点之间的过渡层错并进
+# potentially_affected（与完全离链的宿主机混为一谈）—— 那正是 D-075 要防的。
 
 
 class TestChainIntermediates:
@@ -142,15 +144,34 @@ class TestChainIntermediates:
     def test_evidence_immediately_below_anchor(self):
         assert chain_intermediates({AIS}, PARENTS, VM) == [CTR]
 
-    def test_evidence_upstream_of_anchor_yields_empty(self):
-        """GPU 在 AIS 上游 → 到锚点要向下走，不产生向上路径的过渡层。
+    def test_evidence_above_anchor_returns_the_connecting_path(self):
+        """证据在锚点**上方**（本项目最常见）：返回两者之间的过渡层。
 
-        这是最常见的情形（根因在 GPU 层、症状在服务层），
-        影响范围由 evidence 的下游闭包表达，见 TestImpactScope。
+        链路 HOST→GPU→VGPU→VM→CTR→AIS，锚点 AIS：
+          - 证据 VM   → 之间是 CTR            → [CTR]
+          - 证据 VGPU → 之间是 VM、CTR        → [CTR, VM]
+          - 证据 GPU  → 之间是 VGPU、VM、CTR  → [CTR, VGPU, VM]
         """
-        assert chain_intermediates({GPU}, PARENTS, AIS) == []
-        assert chain_intermediates({VGPU}, PARENTS, AIS) == []
-        assert chain_intermediates({VM}, PARENTS, AIS) == []
+        assert chain_intermediates({VM}, PARENTS, AIS) == [CTR]
+        assert chain_intermediates({VGPU}, PARENTS, AIS) == sorted([VM, CTR])
+        assert chain_intermediates({GPU}, PARENTS, AIS) == sorted([VGPU, VM, CTR])
+
+    def test_off_chain_ancestor_is_never_intermediate(self):
+        """宿主机**不得**出现在过渡层里 —— 它提供了证据所在的层，但没被影响。
+
+        这条是上面那个修复的反向保护：如果实现改成"从锚点一路向上走到根"，
+        这个断言会立刻失败。
+        """
+        mid = chain_intermediates({GPU}, PARENTS, AIS)
+        assert HOST not in mid, "离链祖先混进 on_chain 会让影响范围退化成全图"
+
+    def test_evidence_on_another_chain_contributes_nothing(self):
+        """证据与锚点互不为祖先 → 不贡献（GPU2 在另一条链上）。"""
+        assert chain_intermediates({GPU2}, PARENTS, AIS) == []
+
+    def test_adjacent_above_yields_empty(self):
+        """证据正好是锚点的父节点 → 之间没有过渡层。"""
+        assert chain_intermediates({CTR}, PARENTS, AIS) == []
 
     def test_adjacent_nodes_yield_empty(self):
         assert chain_intermediates({GPU}, PARENTS, VGPU) == []
@@ -173,16 +194,18 @@ class TestChainIntermediates:
 
 
 class TestImpactScope:
-    """实测语义（锚点在上游、证据在下游的典型诊断场景）：
+    """三集是**可达集合的一个划分**：
 
-    - `affected`            = 证据自身 + 其下游后代（经数据流受影响）
-    - `potentially_affected`= 可达但既无证据也不在受影响的资源（通常是**上游**祖先）
-    - `on_chain`            = 证据位于锚点下游时的过渡层（典型场景为空）
+    - `affected`             = 有证据的资源 + 其下游后代，**减去**证据与锚点之间的过渡层
+    - `on_chain`             = 证据与锚点之间、本身无证据的过渡层（两个方向都可能）
+    - `potentially_affected` = 结构上可达但既无证据也不在链上的资源（通常是**离链祖先**）
     """
 
     def test_evidence_and_downstream_are_affected(self):
         scope = impact_scope(AIS, {GPU, VGPU}, PARENTS, CHILDREN)
-        assert set(scope.affected) == {GPU, VGPU, VM, CTR, AGENT}
+        # VM / CTR 是证据与锚点之间的过渡层，归 on_chain，不重复计入 affected
+        assert set(scope.affected) == {GPU, VGPU, AGENT}
+        assert set(scope.on_chain) == {VM, CTR}
         assert AIS not in scope.affected, "锚点自身不算受影响"
 
     def test_root_host_lands_in_potentially_affected(self):
@@ -211,11 +234,20 @@ class TestImpactScope:
         assert GPU2 not in scope.affected
         assert GPU2 not in scope.potentially_affected
 
-    def test_anchor_upstream_evidence_downstream_gives_empty_on_chain(self):
-        """典型场景：证据在上游（GPU），锚点在下游（AIS）→ on_chain 为空。"""
+    def test_evidence_above_anchor_populates_on_chain(self):
+        """典型场景：证据在上游（GPU），锚点在下游（AIS）→ 过渡层非空。
+
+        链路 HOST→GPU→VGPU→VM→CTR→AIS，
+        证据 {GPU}，锚点 AIS → on_chain = {VGPU, VM, CTR}。
+
+        这个断言是**回归测试**：修复前 `chain_intermediates` 只处理反方向，
+        这里恒为空，过渡层与"离链的宿主机"一起落进 potentially_affected。
+        """
         scope = impact_scope(AIS, {GPU}, PARENTS, CHILDREN)
-        assert scope.on_chain == ()
-        assert set(scope.affected) == {GPU, VGPU, VM, CTR, AGENT}
+        assert set(scope.on_chain) == {VGPU, VM, CTR}
+        # 证据自身与其叶子后代仍在 affected；锚点不计入
+        assert set(scope.affected) == {GPU, AGENT}
+        assert AIS not in scope.affected, "锚点自身永不算受影响"
 
     def test_anchor_downstream_evidence_upstream_populates_on_chain(self):
         """锚点在证据上游时 on_chain 才有内容。
@@ -254,10 +286,15 @@ class TestImpactScope:
         assert list(scope.affected) == sorted(scope.affected)
 
     def test_multi_layer_evidence_does_not_duplicate(self):
-        """多层证据（GPU + 容器）时 affected 不重复、且覆盖整条链。"""
+        """多层证据（GPU + 容器）时三集仍不重复，且并集覆盖整条链。"""
         scope = impact_scope(AIS, {GPU, CTR}, PARENTS, CHILDREN)
         assert len(scope.affected) == len(set(scope.affected))
-        assert set(scope.affected) == {GPU, VGPU, VM, CTR, AGENT}
+        # VGPU / VM 夹在 GPU 与 CTR 之间且无证据 -> on_chain
+        assert set(scope.on_chain) == {VGPU, VM}
+        assert set(scope.affected) == {GPU, CTR, AGENT}
+        union = set(scope.affected) | set(scope.on_chain) | set(scope.potentially_affected)
+        assert union == {HOST, GPU, VGPU, VM, CTR, AGENT}, "并集覆盖锚点的全部可达资源"
+
 
 
 # ---------------------------------------------------------------- 关系校验

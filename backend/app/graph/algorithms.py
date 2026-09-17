@@ -236,56 +236,88 @@ def chain_intermediates(
     parent_index: Mapping[str, str],
     anchor: str,
 ) -> list[str]:
-    """证据与锚点之间、位于链上但**本身无证据**的过渡层。
+    """证据与锚点之间、位于同一条父子链上但**本身无证据**的过渡层。
 
-    算法分两遍，避免边界错误：
+    先定方向，再走一次 —— 两个方向都要有：
 
-      第一遍：判断 anchor 是否在该证据的**祖先链**上。
-              若不是（两者不在同一条链上），该证据不贡献过渡层。
-      第二遍：从证据沿父链向上走并**收集每一个经过的节点**，直到抵达 anchor
-              （anchor 本身不收集）。遇到其他证据节点**仍然收集** ——
-              它是需要跨越的过渡目标，且更上游可能还有证据。
+    | 情形 | 判据 | 走法 |
+    |---|---|---|
+    | A | 锚点是证据的**祖先**（证据更深） | 从证据沿父链向上，停在锚点 |
+    | B | 证据是锚点的**祖先**（锚点更深） | 从锚点沿父链向上，停在该证据 |
+    | C | 互不为祖先 | 两者不在同一条链上，本证据不贡献 |
 
-    例：证据 = {GPU, VGPU}，锚点 = AI_SERVICE（链路 HOST→GPU→VGPU→VM→CTR→AIS）
-        GPU  → 收集 VGPU, VM, CTR → 抵达 AIS 停
-        VGPU → 收集 VM, CTR      → 抵达 AIS 停
-        并集 = {VGPU, VM, CTR}，减去证据 = {VM, CTR}
+    只实现 A 会让本项目最常见的场景永远返回空：数据模型里锚点是链路末端的
+    AI 服务，而证据多在 GPU / 容器上（即情形 B）。那样"证据到锚点之间的过渡层"
+    就会被错并进 `potentially_affected`，与**完全离链的宿主机**混为一谈 ——
+    恰好抹掉 `on_chain` 存在的意义（C 的 D-075）。
 
-    **离链祖先（宿主机）不会被收集** —— 锚点在它下游，向上走不到它。
+    **情形 C 必须不贡献**，尤其不能"向上走到根为止"：那会把宿主机当成链上的
+    过渡层。宿主机提供了证据所在的层，但并没有被影响（`DIAGNOSIS_DESIGN.md` §6）。
 
-    若某证据在锚点**下游**（锚点不是它的祖先），它不贡献过渡层。
+    情形 A 向上走时遇到**其他证据节点即停**：那条链有自己的端点，
+    继续往上就越过它了。
     """
     evidence = set(evidence_resources)
     mid: set[str] = set()
 
-    for resource_id in evidence:
-        # 第一遍：anchor 是否在该证据的祖先链上？
-        ancestors_of_evidence: set[str] = set()
-        current = resource_id
-        while True:
-            parent = parent_index.get(current)
-            if parent is None or parent in ancestors_of_evidence:
-                break
-            ancestors_of_evidence.add(parent)
-            current = parent
+    # 锚点的祖先集合（含锚点自身），用于判定 A / B / C
+    anchor_lineage: set[str] = {anchor}
+    current = anchor
+    while True:
+        parent = parent_index.get(current)
+        if parent is None or parent in anchor_lineage:
+            break
+        anchor_lineage.add(parent)
+        current = parent
 
-        if anchor not in ancestors_of_evidence:
-            continue  # 锚点不在该证据上游 → 无过渡层
+    for resource_id in sorted(evidence):
+        if resource_id == anchor:
+            continue
 
-        # 第二遍：收集路径上的节点（不含 anchor）
-        current = resource_id
-        seen: set[str] = {resource_id}
-        while True:
-            parent = parent_index.get(current)
-            if parent is None or parent in seen or parent == anchor:
-                break
-            seen.add(parent)
-            mid.add(parent)
-            current = parent
+        if anchor in _ancestors_of(resource_id, parent_index):
+            # 情形 A：锚点在证据上方
+            current = resource_id
+            seen = {resource_id}
+            while True:
+                parent = parent_index.get(current)
+                if parent is None or parent in seen or parent == anchor:
+                    break
+                if parent in evidence:
+                    break  # 另一条证据链的端点
+                seen.add(parent)
+                mid.add(parent)
+                current = parent
+
+        elif resource_id in anchor_lineage:
+            # 情形 B：证据在锚点上方 —— 从锚点向上走，停在证据处
+            current = anchor
+            seen = {anchor}
+            while True:
+                parent = parent_index.get(current)
+                if parent is None or parent in seen or parent == resource_id:
+                    break
+                seen.add(parent)
+                mid.add(parent)
+                current = parent
+
+        # 情形 C：互不为祖先 → 不贡献
 
     mid.discard(anchor)
     mid -= evidence
     return sorted(mid)
+
+
+def _ancestors_of(node: str, parent_index: Mapping[str, str]) -> set[str]:
+    """`node` 的全部祖先（不含自身）。含环保护。"""
+    out: set[str] = set()
+    current = node
+    while True:
+        parent = parent_index.get(current)
+        if parent is None or parent in out or parent == node:
+            break
+        out.add(parent)
+        current = parent
+    return out
 
 
 def impact_scope(
@@ -324,8 +356,14 @@ def impact_scope(
     for resource_id in evidence_set:
         affected.update(descendants(resource_id, child_index))
 
-    # on_chain：干净父链上缺环的中间层
+    # on_chain：证据与锚点之间、本身无证据的过渡层
     on_chain = set(chain_intermediates(evidence_set, parent_index, anchor) if propagate else ())
+
+    # **过渡层从 affected 中剔除**：三集是可达集合的一个划分，同一资源不得同时
+    # 出现在两个集合里（D-075）。过渡层往往是证据的下游（容器在 GPU 的下游），
+    # 若不剔除就会两边都出现 —— 这个缺陷在 `chain_intermediates` 修复前是隐藏的，
+    # 因为那时 on_chain 恒为空。
+    affected -= on_chain
 
     affected.discard(anchor)
     on_chain.discard(anchor)
