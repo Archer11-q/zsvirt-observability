@@ -69,7 +69,7 @@ Testing/
 .cache/
 
 # ============================================================
-# ZSvirt Observability
+# Crosslayer — repository ignore rules
 #
 # This file intentionally covers BOTH toolchains:
 #
