@@ -112,10 +112,40 @@ def upsert_resource(
     # 它改动了 ORM 对象，因此 identity map 里仍缓存着**上一次读到的旧值**。
     # 不失效的话，`session.get()` 会直接返回旧对象，
     # 表现为"last_seen_at 没有推进"这类静默错误（本模块单测抓到过）。
+    # ---- 同步邻接表 ----
+    #
+    # `Resource.parent_id` 与 `ResourceEdge` 是同一关系的两个视图，必须一起维护
+    # （见 `models.ResourceEdge` 的约定）。**此前只有测试调用 `ensure_edge`**，
+    # 真实上报路径从不写边表 —— 于是 `load_graph`（它遍历边表）在真实数据上
+    # 返回一堆孤立节点：拓扑没有连线、工作负载找不到链路成员、诊断的
+    # ancestors/descendants 全为空。这个缺口被"所有测试都手工建边"掩盖了很久。
+    #
+    # 这里**不调用 `ensure_edge`**：它会为缺失端点抛错，而上报时子资源可能先于
+    # 父资源写入（顺序由探针决定），为一个内部顺序细节让整批上报失败是错的。
+    # 边在两端都存在的下一次 upsert 里补齐，操作幂等。
+    _sync_edge_for_parent(session, child_id=resource_id, parent_id=parent_id)
+    session.flush()
+
     session.expire_all()
     resource = session.get(Resource, resource_id)
     assert resource is not None  # 刚 upsert，必然存在
     return resource
+
+
+def _sync_edge_for_parent(session: Session, *, child_id: str, parent_id: str | None) -> None:
+    """父子两端都已存在时补上邻接表的一行（幂等）。
+
+    父资源不存在时**不写边**，让 `resource.parent_id` 暂时悬空。这比写一条指向
+    不存在节点的边更好查；上报服务本就会为父资源兜底建占位节点，所以悬空是
+    暂时的，而错的边会永久留在图里。
+    """
+    if parent_id is None or parent_id == child_id:
+        return
+    if session.get(Resource, parent_id) is None:
+        return
+    existing = session.get(ResourceEdge, {"parent_id": parent_id, "child_id": child_id})
+    if existing is None:
+        session.add(ResourceEdge(parent_id=parent_id, child_id=child_id, relation="hosts"))
 
 
 def set_status(session: Session, resource_id: str, status: str) -> Resource | None:

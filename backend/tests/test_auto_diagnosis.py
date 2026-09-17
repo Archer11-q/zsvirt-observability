@@ -92,8 +92,16 @@ class TestAutomaticLinkage:
         diag = client.get(f"/api/v1/diagnosis/{alert['diagnosisId']}").json()["data"]
         assert diag["trigger"] == {"alertId": alert["id"]}
         assert diag["ruleSetVersion"], "结论必须带规则集版本"
-        # 规则集尚未配置，因此根因诚实地是 UNKNOWN（不编造）
-        assert diag["rootCause"] == "UNKNOWN"
+
+        # **具体根因**，不再是 UNKNOWN。
+        #
+        # 此前这里断言的是 `UNKNOWN`（规则集为空时的正确行为）。规则集落地后，
+        # 诚实的期望值是对应场景的具体根因 —— 保留 UNKNOWN 断言会掩盖
+        # "规则集写坏了导致永不命中"这类回归。
+        assert diag["rootCause"] == "CONTAINER_MEMORY_LIMIT"
+        assert diag["confidence"] >= 0.30, "有规则的结论必须过最小置信阈值"
+        assert diag["confidenceBreakdown"], "根因必须能列出支撑它的规则贡献"
+        assert diag["evidence"], "根因必须有证据（红线）"
 
     def test_warning_alert_is_not_auto_diagnosed(self, client: TestClient) -> None:
         """提示级告警不自动诊断：自动跑根因分析只会灌出一堆 `UNKNOWN`，

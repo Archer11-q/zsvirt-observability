@@ -145,6 +145,8 @@ def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
 
     # ---- 步骤 4：匹配（全部留痕）----
     by_cause: dict[str, list[RuleHit]] = {}
+    #: 命中的规则本身（hit.rule_id → Rule），用来区分支持型与反证型命中
+    hit_rules: dict[str, Rule] = {}
     for rule in ctx.rule_set.rules:
         for ev in relevant:
             res = ctx.resources.get(ev.resource_id)
@@ -152,14 +154,19 @@ def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
                 observed = rule.observed_template.format(
                     value=ev.value if ev.value is not None else ev.count
                 )
+                # `contradicts` 命中 = "这条观测**反对**那个结论"，
+                # 因此记到被反对的结论名下，而不是记到规则自己的 root_cause 下。
+                # 未设置 contradicts 时就是普通的支持型规则。
+                target = rule.contradicts or rule.root_cause
                 hit = RuleHit(
                     rule_id=rule.id,
-                    root_cause=rule.root_cause,
+                    root_cause=target,
                     contribution=rule.contribution,
                     observed=observed,
                     evidence_refs=ev.event_ids,
                 )
-                by_cause.setdefault(rule.root_cause, []).append(hit)
+                by_cause.setdefault(target, []).append(hit)
+                hit_rules[rule.id] = rule
     if not by_cause:
         notes.append("规则集无匹配，按红线返回 UNKNOWN（不编造根因）")
         return Diagnosis(
@@ -218,6 +225,21 @@ def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
     #   3. 其余结构相关但无证据的资源进 potentially_affected，与前者分开。
     #   4. 证据的**上游**资源（如证据为 GPU 时的宿主机）不算受影响 ——
     #      它是提供证据的层，不是被影响的对象。
+    # 只列出**支持**该结论的证据：反证不属于"支撑这条诊断的证据"，
+    # 把它放进去会让 `evidence` 变成自我否证的材料。
+    #
+    # 用命中的 `evidence_refs` 精确对齐，不做模糊匹配 —— 一条证据的事件 id
+    # 要么被某条支持型规则引用过，要么没有。
+    supporting_refs: set[str] = {
+        ref
+        for hit in by_cause[top_cause]
+        if (hit_rules.get(hit.rule_id) is None or hit_rules[hit.rule_id].contradicts is None)
+        for ref in hit.evidence_refs
+    }
+    supporting_evidence = [
+        ev for ev in relevant if set(ev.event_ids) & supporting_refs or not ev.event_ids
+    ]
+
     evidence_resources = {ev.resource_id for ev in relevant}
     propagating_causes = {r.root_cause for r in ctx.rule_set.rules if r.propagate}
     scope = ctx.impact_scope(evidence_resources, propagate=top_cause in propagating_causes)
@@ -232,7 +254,7 @@ def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
         affected_resources=scope.affected,
         potentially_affected=scope.potentially_affected,
         on_chain=scope.on_chain,
-        evidence=tuple(relevant),
+        evidence=tuple(supporting_evidence),
         recommendation=RECOMMENDATIONS.get(top_cause, ()),
         rule_set_version=ctx.rule_set.version,
         notes=tuple(notes),

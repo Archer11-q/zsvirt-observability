@@ -22,7 +22,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from ulid import ULID
 
+from app.alerts.repository import query_alerts
 from app.diagnosis import Diagnosis, DiagnosisContext, RuleSet, TimeWindow, diagnose
+from app.diagnosis.rules import build_default_rule_set
 from app.diagnosis.types import Edge as DiagnosisEdge
 from app.diagnosis.types import Evidence, EvidenceKind, Resource
 from app.events.repository import query_events
@@ -38,6 +40,9 @@ DEFAULT_WINDOW_AFTER = timedelta(minutes=2)
 #: 单次诊断最多纳入的事件数。防止超大时间窗把整个事件表拉进内存 ——
 #: 诊断是交互式操作，宁可截断并留 note，也不要让一次点击变成全表扫描。
 MAX_CONTEXT_EVENTS = 5000
+
+#: 单次诊断最多纳入的告警数。与事件同理设上限。
+MAX_CONTEXT_ALERTS = 500
 
 #: 资源图遍历深度上限。链路最长是 HOST→GPU→vGPU→VM→CONTAINER→AI_SERVICE→AGENT，
 #: 8 层留有余量。
@@ -89,16 +94,34 @@ def build_context(
     )
 
     evidence = tuple(
+        item for e in events for item in _event_evidence(e)
+    )
+
+    # ---- 告警也是证据，而且质量更高 ----
+    #
+    # 告警已经过聚合与分级："R-CTR-OOM-010 触发了 3 次"比三条零散的
+    # `container.oom_killed` 事件更能说明容器确实被 OOM 杀了。
+    # `EvidenceKind.ALERT` 从一开始就在类型系统里，但此前从未被填充 ——
+    # 也就是说任何以告警为证据的规则都**永远不可能命中**。
+    alert_evidence = tuple(
         Evidence(
-            kind=EvidenceKind.EVENT,
-            name=e.type,
-            at=e.occurred_at,
-            resource_id=e.resource_id,
-            value=_evidence_value(e),
-            count=_evidence_count(e),
-            event_ids=(e.id,),
+            kind=EvidenceKind.ALERT,
+            # 规则按**告警规则 id** 匹配（见 rules.py 的"匹配名"说明）
+            name=a.rule_id,
+            at=a.last_fired_at,
+            resource_id=a.resource_id,
+            value=str(a.count),
+            count=a.count,
+            # 告警的证据是它采纳的那些事件，诊断要能顺着追下去
+            event_ids=tuple(a.evidence_event_ids or ()),
         )
-        for e in events
+        for a in query_alerts(
+            session,
+            limit=MAX_CONTEXT_ALERTS,
+            fired_from=window.start,
+            fired_to=window.end,
+            resource_ids=sorted(reachable),
+        )[0]
     )
 
     return DiagnosisContext(
@@ -106,17 +129,84 @@ def build_context(
         window=window,
         resources=resources,
         edges=diagnosis_edges,
-        evidence=evidence,
-        rule_set=rule_set or RuleSet(version="rs-unconfigured"),
+        evidence=evidence + alert_evidence,
+        rule_set=rule_set or build_default_rule_set(),
     )
 
 
-def _evidence_value(event: Any) -> str | None:
-    """从事件里取出**可比较**的观测值。
+def _event_evidence(event: Any) -> list[Evidence]:
+    """把一个事件展开成若干条证据。
 
-    只有 `metrics.value` 无法表达"断言式"事件（如 `gpu.memory.exhausted`
-    没有数值），因此退回到 `message` 的短描述；两者都没有就是 `None`，
-    规则里的比较型条件会自动判为不匹配（而不是崩在 `float(None)`）。
+    **两条以上**：事件类型本身一条，每个数值型指标各一条。
+
+    | 证据 | `name` | 命中什么规则 |
+    |---|---|---|
+    | 事件 | 事件 `type`（如 `container.oom_killed`） | 事件型规则（"发生了什么"） |
+    | 指标 | 指标名（如 `container_memory_usage_ratio`） | 指标型规则（"量到了多少"） |
+
+    为什么必须这样拆：引擎的 `_matches` 用 `name` 匹配，而早期实现让所有证据的
+    `name` 都是事件类型、`value` 只取 `metrics["value"]` —— 于是**任何按指标名
+    匹配的规则都永远不可能命中**，包括 GPU 显存阈值与容器内存比例。
+    这类规则当时看起来"已覆盖"，实际是死数据。
+
+    两者共用同一组 `eventIds`，所以任一条都能追回原始事件。
+    """
+    items: list[Evidence] = [
+        Evidence(
+            kind=EvidenceKind.EVENT,
+            name=event.type,
+            at=event.occurred_at,
+            resource_id=event.resource_id,
+            value=_evidence_value(event),
+            count=_evidence_count(event),
+            event_ids=(event.id,),
+        )
+    ]
+
+    for key, raw in (event.metrics or {}).items():
+        number = _as_number(raw)
+        if number is None:
+            # 非数值型指标（dict / 列表 / 纯标签）不是"测量结果"，
+            # 不能硬转成数字参与比较
+            continue
+        items.append(
+            Evidence(
+                kind=EvidenceKind.METRIC,
+                name=str(key),
+                at=event.occurred_at,
+                resource_id=event.resource_id,
+                value=str(number),
+                event_ids=(event.id,),
+            )
+        )
+    return items
+
+
+def _as_number(raw: Any) -> float | None:
+    """把指标值转成数字；转不了就返回 `None`（**不猜、不默认为 0**）。
+
+    容忍探针可能上报的 `"98%"` 这类带百分号的字符串。返回 `None` 而不是 0：
+    0 是一个合法测量值，用它表示"没能解析"会让规则把缺失当成"读数为零"。
+    """
+    if isinstance(raw, bool):
+        # bool 是 int 的子类，但 `True` 不是一次测量
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, str):
+        try:
+            return float(raw.rstrip("%").strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _evidence_value(event: Any) -> str | None:
+    """事件型证据的展示值：优先 `metrics.value`，否则不用（返回 `None`）。
+
+    不在缺失时退回 `message`：`message` 是给人看的描述文本，把它塞进
+    `value` 会让比较型规则对着一段中文做 `float()` 并静默不匹配 ——
+    看起来像"规则没生效"，实际是数据里根本没有可比较的量。
     """
     metrics = event.metrics or {}
     if "value" in metrics:
@@ -442,6 +532,7 @@ def link_to_alert(session: Session, alert_id: str, diagnosis_id: str) -> bool:
 __all__ = [
     "DEFAULT_WINDOW_AFTER",
     "DEFAULT_WINDOW_BEFORE",
+    "MAX_CONTEXT_ALERTS",
     "MAX_CONTEXT_EVENTS",
     "MAX_GRAPH_DEPTH",
     "build_context",
