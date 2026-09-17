@@ -1,6 +1,6 @@
-# ZSvirt Observability
+# Crosslayer
 
-面向 ZSvirt 虚拟机的全栈可观测与根因诊断平台。
+**面向 ZSvirt 虚拟机内部 AI 工作负载的跨层可观测与根因诊断平台。**
 
 以 ZSvirt 虚拟机为边界、以 AI 工作负载为对象、以事件关联为核心，建立
 
@@ -11,6 +11,10 @@
 之间的可追溯关系，并提供指标 / 日志 / 事件的接入、告警、跨层关联、根因候选、
 影响范围分析与处置建议。
 
+> **名称说明**：产品名为 **Crosslayer**（跨层）—— 对应本项目的核心能力：
+> 把宿主机、GPU/vGPU、虚拟机、容器、AI 服务与 Agent 的分散信号关联成一条可解释的证据链。
+> 仓库名保持 `zsvirt-observability`，以便按赛道关键词检索。
+>
 > **状态：设计阶段。** 本仓库当前只有设计文档，尚未开始实现。
 > 所有设计文档均为 DRAFT，需团队评审后才能作为实现依据。
 
@@ -18,10 +22,12 @@
 
 | 文档 | 内容 |
 |---|---|
+| [docs/DECISIONS.md](docs/DECISIONS.md) | **决策登记表** —— 全部已冻结决策的唯一查阅入口 |
+| [docs/CONTRACT_FREEZE.md](docs/CONTRACT_FREEZE.md) | 契约冻结提案：待三方确认的枚举与码表 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构、分层、数据流、模块边界、设计优先级 |
 | [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | 资源 / 事件 / 告警 / 诊断对象与 ID 语义 |
 | [docs/API_CONTRACT.md](docs/API_CONTRACT.md) | A→B 上报契约、B→C 查询契约、错误模型 |
-| [docs/TECH-BASELINE.md](docs/TECH-BASELINE.md) | 语言 / 框架 / 数据库 / 版本基线 |
+| [docs/TECH-BASELINE.md](docs/TECH-BASELINE.md) | 语言 / 框架 / 数据库 / 版本基线、ZSvirt 能力边界 |
 | [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | 兼容性与演进规则 |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | 环境要求、部署步骤、配置项、模拟模式 |
 | [docs/SENSITIVE_DATA.md](docs/SENSITIVE_DATA.md) | 敏感信息保护：脱敏、字段过滤、访问控制 |

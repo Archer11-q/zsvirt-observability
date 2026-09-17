@@ -1,6 +1,10 @@
-# 协作约定
+# Crosslayer — 协作约定
 
-本项目由三位成员并行开发，通过统一的目录边界与接口契约协作。
+本项目（产品名 **Crosslayer**）由三位成员并行开发，通过统一的目录边界与接口契约协作。
+
+> **开始工作前请先读三份文件**：本文件（协作规则）、
+> [`docs/DECISIONS.md`](docs/DECISIONS.md)（已冻结的决策）、
+> [`docs/CONTRACT_FREEZE.md`](docs/CONTRACT_FREEZE.md)（待确认的枚举与码表）。
 
 ---
 
@@ -78,7 +82,11 @@ git checkout -b feature/member-a/probe-bootstrap   # 成员 A 示例
 |---|---|
 | 成员 A | `docs/API_CONTRACT.md` §3（A → B 上报契约）、§3.3 的 Q1–Q7 |
 | 成员 B | §3 与 §4 全部，以及 §5（ZSvirt 适配待确认项） |
-| 成员 C | `docs/API_CONTRACT.md` §4（B → C 查询契约）、§4.7 的 Q8–Q14 |
+| 成员 C | `docs/API_CONTRACT.md` §4（B → C 查询契约）、§4.10 的 Q8–Q14 结论 |
+
+**契约问题的当前状态请先查 [`docs/DECISIONS.md`](docs/DECISIONS.md)** ——
+它汇总了全部决策及其状态（✅ 已冻结 / 🟡 待确认 / ⛔ 外部阻塞），
+比逐份翻文档更快。待确认项集中在 [`docs/CONTRACT_FREEZE.md`](docs/CONTRACT_FREEZE.md)。
 
 ---
 
@@ -94,6 +102,9 @@ git checkout -b feature/member-a/probe-bootstrap   # 成员 A 示例
 5. 团队职责 / 流程文档
 6. 个人推测
 ```
+
+> `docs/DECISIONS.md` 是第 2 级的**索引视图**：它不定义新技术细节，
+> 但决定"某个问题定了没有"。**决策是否成立以它为准**，技术细节以对应专题文档为准。
 
 ---
 
