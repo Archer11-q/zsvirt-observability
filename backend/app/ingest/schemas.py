@@ -224,6 +224,17 @@ class IngestResult(BaseModel):
     #: 事件类型不在冻结枚举中的数量。不拒收（拒收代价过高），但要让违约可见。
     acceptedUnknownTypes: int = 0
 
+    #: 本批**触及**的告警 id（新建 + 累加证据）。**不参与序列化**（`exclude=True`），
+    #: 供自动诊断联动使用：累加证据的告警同样要过一遍守卫，这样
+    #: "为什么这条告警没有被自动诊断"才能在响应里看到原因。
+    touchedAlertIds: list[str] = Field(default_factory=list, exclude=True)
+
+    #: 本批**新建**的告警 id。**不参与序列化**（`exclude=True`），
+    #: 只在进程内传给自动诊断联动使用 —— 它是流程内部信息，不是契约字段。
+    #: 放在这里而不是让调用方再查一次库：引擎已经算出来了，重查既慢又容易
+    #: 把别的批次产生的告警也算进来。
+    createdAlertIds: list[str] = Field(default_factory=list, exclude=True)
+
     #: 本次上报触发的告警引擎摘要（结构见 `AlertEvaluation.as_dict()`）。
     #:
     #: 放在响应里是**刻意的**：否则上报方想知道"我这批数据报警了吗"只能去轮询

@@ -42,6 +42,16 @@ VM_ID = "vm:zsvirt:3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44"
 _BATCH_SEQ = itertools.count(1)
 
 
+def _replayable(data: dict) -> dict:
+    """去掉"本来就该不同"与"每次现算"的字段，得到应逐字节一致的载荷。"""
+    out = {k: v for k, v in data.items() if k != "duplicate"}
+    if isinstance(out.get("alerts"), dict):
+        out["alerts"] = {
+            k: v for k, v in out["alerts"].items() if k != "autoDiagnosis"
+        }
+    return out
+
+
 def make_payload(**overrides) -> dict:
     payload = {
         "agentId": AGENT,
@@ -172,9 +182,12 @@ class TestHappyPath:
         second_data = second.json()["data"]
         assert first_data["duplicate"] is False
         assert second_data["duplicate"] is True, f"第二次未被识别为重复批次：{second_data}"
-        assert {k: v for k, v in second_data.items() if k != "duplicate"} == {
-            k: v for k, v in first_data.items() if k != "duplicate"
-        }
+        # 逐字段比对，但两个字段必须排除：
+        #   - `duplicate` 本身（首次 false / 回放 true，就是要不同）
+        #   - `alerts.autoDiagnosis`：**每次请求现算**且含真实 diagnosisId，
+        #     不属于幂等缓存；重复批次本来就不会再跑一次联动
+        # 其余字段（含引擎摘要 created/updated/各项计数）必须完全一致。
+        assert _replayable(second_data) == _replayable(first_data)
         assert second_data["resources"] == first_data["resources"], (
             "A 用这个响应维护「已确认资源」缓存，逐条结果必须一致"
         )

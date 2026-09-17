@@ -70,6 +70,13 @@ def seed_resource(session: Session, resource_id: str, kind: str) -> None:
     session.commit()
 
 
+def _engine_summary(result: dict) -> dict:
+    """去掉每次请求现算的字段，只留可回放的引擎摘要。"""
+    summary = dict(result["alerts"])
+    summary.pop("autoDiagnosis", None)
+    return summary
+
+
 def seed_alert(
     session: Session,
     alert_id: str,
@@ -890,9 +897,13 @@ class TestIdempotency:
 
         replay = ingest(client, payload)  # 同一个 batchId
         assert replay["duplicate"] is True
-        # 回放的是**首次结果的缓存**，因此摘要与首次完全一致 ——
+        # 回放的是**首次结果的缓存**，因此引擎摘要与首次完全一致 ——
         # 这正是幂等要保证的"重复批次返回与首次一致的结果"。
-        assert replay["alerts"] == first["alerts"]
+        #
+        # 排除 `autoDiagnosis`：它是**每次请求现算**的（含真实 diagnosisId），
+        # 不属于可回放缓存的一部分。这不是放宽断言 —— 引擎摘要本身
+        # （created/updated/各项计数/规则集版本）仍然逐字段比较。
+        assert _engine_summary(replay) == _engine_summary(first)
 
         after = {a["id"]: a["count"] for a in alerts_of(client)}
         assert after == before, "重复投递不得新建告警，也不得累加 count"

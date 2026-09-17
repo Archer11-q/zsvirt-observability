@@ -300,6 +300,8 @@ def ingest_batch(
         rejected=rejected,
         acceptedUnknownTypes=unknown_types,
         alerts=alert_evaluation.as_dict(),
+        createdAlertIds=list(alert_evaluation.created),
+        touchedAlertIds=list(alert_evaluation.created) + list(alert_evaluation.updated),
     )
 
     # ---- 记录批次（供幂等回放）----

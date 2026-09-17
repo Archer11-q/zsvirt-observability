@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
+from app.diagnosis.auto import run_auto_diagnosis
 from app.ingest.limits import metrics, rate_limiter
 from app.ingest.schemas import IngestBatch, IngestResponse
 from app.ingest.service import BatchTooLarge, ingest_batch
@@ -161,6 +162,18 @@ async def ingest_batch_endpoint(
             f"落库失败：{type(exc).__name__}",
             details={"detail": str(exc)[:300]},
         )
+
+    # ---- 自动诊断联动（C 的 Q13：自动 + 手动都要）----
+    #
+    # **在上报事务提交之后**执行。诊断失败绝不能影响上报结果 ——
+    # 数据采集是主流程，根因分析是增值能力，增值能力不能反过来毁掉主流程。
+    #
+    # 只诊断**本批新建**的告警：累加到既有告警上的证据不重复触发诊断，
+    # 否则一条持续数小时的告警会按上报频率产出成百上千条几乎相同的结论。
+    if not duplicate and result.touchedAlertIds:
+        auto = run_auto_diagnosis(session, list(result.touchedAlertIds))
+        session.commit()
+        result.alerts["autoDiagnosis"] = auto.as_dict()
 
     response.headers["X-Ingest-Duplicate"] = "true" if duplicate else "false"
     return IngestResponse(
