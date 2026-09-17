@@ -28,7 +28,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
-    ARRAY,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -39,6 +38,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -257,7 +257,9 @@ class Alert(Base):
     count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     #: **必填**：指向触发本告警的证据事件
-    evidence_event_ids: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    evidence_event_ids: Mapped[list[str]] = mapped_column(
+        PG_ARRAY(Text), nullable=False, default=list
+    )
 
     #: 聚合/去重键。同键的重复触发累加 count 而不是新建告警。
     aggregation_key: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
@@ -325,13 +327,15 @@ class Diagnosis(Base):
     )
 
     #: 证据直接支持 + 其下游后代（与 potentially 分开，C 要求 D-075）
-    affected_resources: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    affected_resources: Mapped[list[str]] = mapped_column(
+        PG_ARRAY(Text), nullable=False, default=list
+    )
     #: 结构相关但无证据 —— **不得混入 affected_resources**
     potentially_affected: Mapped[list[str]] = mapped_column(
-        ARRAY(Text), nullable=False, default=list
+        PG_ARRAY(Text), nullable=False, default=list
     )
     #: 证据链上但无证据的过渡层
-    on_chain: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    on_chain: Mapped[list[str]] = mapped_column(PG_ARRAY(Text), nullable=False, default=list)
 
     #: 证据列表。**不得为空**，否则 root_cause 只能是 UNKNOWN。
     evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONType, nullable=False, default=list)
@@ -341,7 +345,7 @@ class Diagnosis(Base):
 
     #: 产出该结论的规则集版本 —— 结论可复现的前提
     rule_set_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    notes: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    notes: Mapped[list[str]] = mapped_column(PG_ARRAY(Text), nullable=False, default=list)
 
     __table_args__ = (
         CheckConstraint("confidence >= 0.0 AND confidence <= 1.0", name="ck_diagnosis_confidence"),

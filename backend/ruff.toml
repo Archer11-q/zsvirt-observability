@@ -3,7 +3,15 @@ target-version = "py312"
 
 [lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
-ignore = ["E501"]
+ignore = [
+    "E501",
+    # B008 forbids calling functions in argument defaults. That rule is a false
+    # positive for FastAPI: Query() and Depends() in a default is one of the two
+    # official idioms, the other being Annotated[...] = Query(). The project
+    # uses the first form consistently, so the rule is exempted here with the
+    # reason recorded rather than sprinkling noqa comments on every handler.
+    "B008",
+]
 
 [lint.per-file-ignores]
 "tests/*" = ["S101"]
