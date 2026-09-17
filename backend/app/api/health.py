@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from app import __version__
 from app.config import get_settings
+from app.ingest.limits import metrics
 
 router = APIRouter(tags=["health"])
 
@@ -76,6 +77,17 @@ def probe_database(url: str) -> ComponentStatus:
 def health() -> HealthResponse:
     settings = get_settings()
 
+    # 接入指标取自真实运行状态（`app.ingest.limits`），不再是占位符。
+    ingest_detail: dict = metrics.snapshot()
+    ingest_status = "ok"
+    if metrics.clock_drift_exceeds_warn:
+        # 时钟漂移超阈值会让跨层关联的时间窗失效 → 必须显式降级
+        ingest_status = "degraded"
+        ingest_detail["error"] = "CLOCK_DRIFT_EXCEEDS_THRESHOLD"
+    if metrics.rejected_items:
+        # 有拒收条目说明探针版本与契约不符，值得暴露但不必然降级
+        ingest_detail["note"] = "存在被拒条目，请核对探针版本与 API_CONTRACT"
+
     components: dict[str, ComponentStatus] = {
         "database": probe_database(settings.database_url),
         "zsvirt": ComponentStatus(
@@ -85,16 +97,7 @@ def health() -> HealthResponse:
                 "error": None if settings.zsvirt_endpoint else "ZSVIRT_ENDPOINT_NOT_CONFIGURED",
             },
         ),
-        # 接入层实现后填充真实计数；当前显式标注为未接入。
-        "ingest": ComponentStatus(
-            status="ok",
-            detail={
-                "unresolvedEvents": 0,
-                "clockDriftMs": 0,
-                "discarded": 0,
-                "note": "计数尚未接入实际 ingest 模块",
-            },
-        ),
+        "ingest": ComponentStatus(status=ingest_status, detail=ingest_detail),
         "gpuProvider": ComponentStatus(
             status="ok",
             detail={

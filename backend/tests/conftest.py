@@ -91,3 +91,28 @@ def db_session(db_engine: Engine) -> Iterator[Session]:
             tables = ", ".join(f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables))
             if tables:
                 conn.execute(text(f"TRUNCATE {tables} CASCADE"))
+        # 清空连接池：应用侧与测试侧共用同一引擎，池中连接若带着上一个用例的
+        # 事务快照，后续用例会读到陈旧状态（表现为"已提交的行查不到"）。
+        db_engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _no_rate_limiting_by_default(request, monkeypatch: pytest.MonkeyPatch) -> None:
+    """全局关闭限流（除非用例显式覆盖）。
+
+    限流器是进程级单例，若某个用例为验证 429 而调小阈值，
+    残留会污染同批其他用例（症状是后续请求被意外 429，
+    表现为"指标恒为 0"这类难以定位的失败）。
+
+    这里用 autouse 在**每个**用例前把阈值设到极大，从机制上隔离。
+    需要验证限流的用例加 `@pytest.mark.real_rate_limit` 让本夹具跳过 ——
+    注意**不能用**"用例里设小阈值"的方式：pytest 的 autouse 夹具在显式请求的
+    夹具**之后**实例化，反而会覆盖用例的设置（这个坑真实踩过）。
+    """
+    if request.node.get_closest_marker("real_rate_limit"):
+        # 该用例要验证真实限流，不覆盖它的设置
+        return
+
+    from app.ingest import limits
+
+    monkeypatch.setattr(limits.rate_limiter, "max_batches", 1_000_000)

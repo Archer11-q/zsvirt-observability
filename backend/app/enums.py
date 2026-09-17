@@ -173,13 +173,31 @@ OBSERVABILITY_LABELS: dict[str, str] = {
 
 
 class EventSource(StrEnum):
-    """事件来源（`DATA_MODEL.md` §5.1）。
+    """**事件**来源（`DATA_MODEL.md` §5.1）。
 
     `DERIVED` 表示由 B 自身产生（如时钟漂移、未识别资源计数）。
     """
 
     ZSVIRT = "zsvirt"
     PROBE = "probe"
+    DERIVED = "derived"
+
+
+class EvidenceSource(StrEnum):
+    """**诊断证据**来源。
+
+    与 `EventSource` 分开定义是刻意的：证据可以来自 ZWatch 指标或模拟数据，
+    而事件不能（`DATA_MODEL.md` §5.1 的事件来源只有三种）。
+    两者混用会让 `simulated` 有机会混进事件表，破坏诚实性要求（§4.2.1）。
+
+    `SIMULATED` 尤其关键：赛题要求支持降级模式，但**模拟数据必须可识别**，
+    不得伪装成真实采集进入证据链。
+    """
+
+    ZSVIRT = "zsvirt"
+    ZWATCH = "zwatch"
+    PROBE = "probe"
+    SIMULATED = "simulated"
     DERIVED = "derived"
 
 
