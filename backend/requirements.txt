@@ -1,0 +1,20 @@
+# Crosslayer backend — 锁定精确版本，禁止浮动范围（见 docs/TECH-BASELINE.md §5）
+# 生成日期：2026-09-17   目标运行时：Python 3.12.x
+# 许可证清单见 docs/TECH-BASELINE.md §2.2
+
+# --- 运行时 ---
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+sqlalchemy==2.0.54
+psycopg[binary]==3.3.5
+pydantic==2.13.5
+pydantic-settings==2.15.0
+alembic==1.20.0
+httpx==0.28.1
+python-ulid==4.0.1
+
+# --- 开发与测试（生产镜像可不装）---
+pytest==9.1.1
+pytest-asyncio==1.4.0
+anyio==4.15.1
+ruff==0.16.8
