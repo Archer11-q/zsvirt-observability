@@ -143,6 +143,11 @@ agents/
 
 统一要求：同一 `agentId` 内唯一、生命周期内不变。`agentId = probe-<vm-uuid 前 8 位>`。
 
+⚠️ **连接符必须用 `.`（非 `:`）**：B 侧把探针资源拼成全局 ID
+`{kind}:probe:{agentId}:{sourceId}`（共四段），若 `sourceId` 含冒号会多出一段、
+被 `backend/app/normalize/ids.py::probe_resource_id` 以 `InvalidResourceId` 拒收。
+故 `process` 为 `12345.678`、`ai_service` 为 `vllm.8000`（见 `SENSITIVE_DATA.md` §8.4）。
+
 ---
 
 ## 7. 敏感信息前置过滤（回应 F-05 问题 2）

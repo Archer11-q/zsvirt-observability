@@ -3,6 +3,12 @@
 - `batchId` 用 ULID（契约 D-055），时间单调有序，重试复用同一值以实现幂等。
 - `sourceId` 规则见 DATA_MODEL D-031：container=容器ID前12位、process=starttime+pid、
   ai_service=服务名+端口、agent/task=ULID。
+
+⚠️ `sourceId` **不得包含冒号 `:`**：B 侧拼装全局 ID 为
+`{kind}:probe:{agentId}:{sourceId}`（共四段），若 sourceId 含冒号会变成五段，
+被 `backend/app/normalize/ids.py::probe_resource_id` 以 `InvalidResourceId` 拒收。
+故 `process` 的 `starttime+pid` 用 `.` 连接（如 `12345.678`），`ai_service` 的
+`服务名+端口` 用 `.` 连接（如 `vllm.8000`）。见 `docs/SENSITIVE_DATA.md` §8.4。
 """
 
 from __future__ import annotations
@@ -30,10 +36,17 @@ def _encode(value: int, length: int) -> str:
 
 
 def process_source_id(starttime: str, pid: int) -> str:
-    """进程 sourceId = starttime + pid，避免 pid 复用导致冲突（D-031）。"""
-    return f"{starttime}:{pid}"
+    """进程 sourceId = starttime + pid，避免 pid 复用导致冲突（D-031）。
+
+    用 `.` 连接（非 `:`），否则全局 ID 会多出一段被 B 拒收（见模块 docstring 与
+    `docs/SENSITIVE_DATA.md` §8.4）。
+    """
+    return f"{starttime}.{pid}"
 
 
 def ai_service_source_id(service_name: str, port: int) -> str:
-    """AI 服务 sourceId = 服务名 + 监听端口（D-031）。"""
-    return f"{service_name}:{port}"
+    """AI 服务 sourceId = 服务名 + 监听端口（D-031）。
+
+    用 `.` 连接（非 `:`），理由同上。
+    """
+    return f"{service_name}.{port}"
