@@ -326,3 +326,95 @@ __all__ = [
     "set_status",
     "upsert_resource",
 ]
+
+# 注：拓扑裁剪相关的公开名字在文件末尾定义（`MAX_TOPOLOGY_NODES` 等），
+# 这里不重复登记 —— `__all__` 只列本文件早期定义的函数，
+# 避免"名字还没定义就写进 __all__"造成的阅读误导。
+
+
+# ---------------------------------------------------------------- 拓扑裁剪
+
+#: 单次拓扑响应的上限（成员 C 的 Q12 提案：ECharts graph 在 200 节点内流畅）。
+MAX_TOPOLOGY_NODES = 200
+MAX_TOPOLOGY_EDGES = 400
+
+#: 裁剪时的节点保留优先级（数值越小越优先保留）。
+#:
+#: 为什么按层级而不是按 id：裁剪必须**确定性**（同样数据两次请求结果一致），
+#: 且应保留对诊断最有价值的层 —— 即"跨层关联"涉及的主干
+#: （宿主机 → GPU/vGPU → VM → 容器 → 服务），而不是随机丢掉一半。
+#: 占位节点优先级最低，因为它们只是兜底产物。
+NODE_KEEP_PRIORITY: dict[str, int] = {
+    "host": 0,
+    "gpu": 1,
+    "vgpu": 2,
+    "vm": 3,
+    "container": 4,
+    "ai_service": 5,
+    "process": 6,
+    "agent": 7,
+    "task": 8,
+    "unresolved": 99,
+}
+
+
+def _keep_order_key(resource: Resource) -> tuple[int, str]:
+    """裁剪排序键：先按层级优先级，再按 id 保证全序（确定性）。"""
+    return (NODE_KEEP_PRIORITY.get(resource.kind, 50), resource.id)
+
+
+def trim_topology(
+    nodes: Sequence[Resource],
+    edges: Sequence[Edge],
+    *,
+    max_nodes: int = MAX_TOPOLOGY_NODES,
+    max_edges: int = MAX_TOPOLOGY_EDGES,
+) -> tuple[list[Resource], list[Edge], int, str | None]:
+    """把拓扑裁剪到上限内。
+
+    返回 `(节点, 边, 被丢弃节点数, 裁剪原因)`。
+
+    策略：
+
+    1. 节点先按优先级排序取前 `max_nodes` 个，**再据此过滤边** ——
+       顺序不能反。若先裁边，会出现"边保留了但端点被裁掉"的悬空边，
+       前端布局会因找不到端点而画出诡异连线或直接报错。
+    2. 边若仍超 `max_edges`，保留前 `max_edges` 条（输入顺序稳定）。
+    """
+    ordered = sorted(nodes, key=_keep_order_key)
+
+    reason: str | None = None
+    dropped = 0
+    if len(ordered) > max_nodes:
+        dropped = len(ordered) - max_nodes
+        ordered = ordered[:max_nodes]
+        reason = (
+            f"节点数超过上限 {max_nodes}（共 {len(nodes)}），已按层级优先级裁剪；"
+            "请用 rootId / depth / kinds 缩小范围"
+        )
+
+    kept_ids = {r.id for r in ordered}
+    kept_edges = [e for e in edges if e.parent_id in kept_ids and e.child_id in kept_ids]
+
+    if len(kept_edges) > max_edges:
+        kept_edges = kept_edges[:max_edges]
+        extra = f"边数超过上限 {max_edges}，已裁剪"
+        reason = f"{reason}；{extra}" if reason else extra
+
+    return ordered, kept_edges, dropped, reason
+
+
+def format_staleness(last_seen_at: datetime, now: datetime | None = None) -> str:
+    """把"距上次观测多久"格式化为紧凑字符串（如 `10m` / `2h` / `3d`）。
+
+    前端直接展示，不必自己做单位换算与四舍五入决策。
+    """
+    reference = now or datetime.now(UTC)
+    seconds = max(0, int((reference - last_seen_at).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
