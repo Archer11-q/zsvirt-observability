@@ -86,9 +86,20 @@ python -m uvicorn app.main:app --port 8080
 curl -s localhost:8080/api/health                       # 健康与降级状态
 curl -s localhost:8080/api/v1/dict                      # 枚举码表（含中文文案）
 curl -s localhost:8080/api/v1/workloads                 # AI 服务负载总览
+
+# 灌入一份"容器 OOM"场景事件 → 告警由规则自动产生（响应里带告警摘要）
+curl -s -X POST localhost:8080/api/v1/ingest/batch \
+     -H 'content-type: application/json' \
+     -d '{"agentId":"demo","vmId":"vm:zsvirt:d0000000-0000-0000-0000-000000000000",
+          "agentVersion":"1.0","batchId":"demo-1","sentAt":"2026-09-17T12:00:00Z",
+          "resources":[{"kind":"container","sourceId":"web-0","status":"running"}],
+          "events":[{"occurredAt":"2026-09-17T12:00:00Z","type":"container.oom_killed",
+                     "resourceRef":{"kind":"container","sourceId":"web-0"}}]}'
+
+curl -s 'localhost:8080/api/v1/alerts?state=firing'     # 看自动产生的告警
 curl -s -X POST localhost:8080/api/v1/diagnoses \
      -H 'content-type: application/json' \
-     -d '{"alertId":"alert_..."}'                       # 一键诊断（需先有告警）
+     -d '{"alertId":"alert_..."}'                       # 一键诊断
 ```
 
 交互式 API 文档：<http://localhost:8080/docs>

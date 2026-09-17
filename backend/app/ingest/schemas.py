@@ -224,6 +224,13 @@ class IngestResult(BaseModel):
     #: 事件类型不在冻结枚举中的数量。不拒收（拒收代价过高），但要让违约可见。
     acceptedUnknownTypes: int = 0
 
+    #: 本次上报触发的告警引擎摘要（结构见 `AlertEvaluation.as_dict()`）。
+    #:
+    #: 放在响应里是**刻意的**：否则上报方想知道"我这批数据报警了吗"只能去轮询
+    #: `/api/v1/alerts`，把一个推送流程变成轮询。摘要不含告警全文，
+    #: 只含计数与规则集版本 —— 上报方要的是"有没有事"，不是告警详情。
+    alerts: dict[str, Any] = Field(default_factory=dict)
+
 
 class IngestResponse(BaseModel):
     """对外响应包裹（`API_CONTRACT.md` §2.2）。"""

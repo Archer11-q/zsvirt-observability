@@ -81,6 +81,25 @@ def db_engine() -> Iterator[Engine]:
     engine.dispose()
 
 
+def _truncate_all(engine: Engine) -> None:
+    """清空全部表。
+
+    用 `TRUNCATE ... CASCADE` 而不是 drop/create：保持表结构（省时间），
+    只清数据，且能正确处理外键依赖顺序。
+
+    **必须能被每个写库的夹具调用**，不能只挂在 `db_session` 上 ——
+    只请求 `client` 的用例同样会写库（通过 API 提交），若不清理就会把数据
+    泄漏给后续用例，症状是"单独跑通过、一起跑失败"。
+    """
+    with engine.begin() as conn:
+        tables = ", ".join(f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables))
+        if tables:
+            conn.execute(text(f"TRUNCATE {tables} CASCADE"))
+    # 清空连接池：应用侧与测试侧共用同一引擎，池中连接若带着上一个用例的
+    # 事务快照，后续用例会读到陈旧状态（表现为"已提交的行查不到"）。
+    engine.dispose()
+
+
 @pytest.fixture
 def db_session(db_engine: Engine) -> Iterator[Session]:
     """每个测试一个 session，测试结束后清空全部表。
@@ -95,13 +114,7 @@ def db_session(db_engine: Engine) -> Iterator[Session]:
     finally:
         session.rollback()
         session.close()
-        with db_engine.begin() as conn:
-            tables = ", ".join(f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables))
-            if tables:
-                conn.execute(text(f"TRUNCATE {tables} CASCADE"))
-        # 清空连接池：应用侧与测试侧共用同一引擎，池中连接若带着上一个用例的
-        # 事务快照，后续用例会读到陈旧状态（表现为"已提交的行查不到"）。
-        db_engine.dispose()
+        _truncate_all(db_engine)
 
 
 @pytest.fixture
@@ -136,6 +149,10 @@ def client(db_engine: Engine) -> Iterator[TestClient]:
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_db, None)
+        # 通过 API 写入的行是**已提交**的，只有 TRUNCATE 能清掉。
+        # 放在这里而不是只放在 `db_session` 里：否则"只请求 client"的用例
+        # 会把数据泄漏给后续用例（见 `_truncate_all` 的说明）。
+        _truncate_all(db_engine)
 
 
 @pytest.fixture(autouse=True)

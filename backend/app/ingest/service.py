@@ -27,6 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ulid import ULID
 
+from app.alerts.engine import evaluate_events
 from app.graph.repository import placeholder_resource_id, upsert_resource
 from app.ingest.limits import BatchRateLimiter, IngestMetrics, metrics, rate_limiter
 from app.ingest.schemas import (
@@ -225,6 +226,9 @@ def ingest_batch(
     # ---- 事件 ----
     accepted_events = 0
     unknown_types = 0
+    #: 本批**真正写入**的事件对象。告警引擎需要对它们求值，因此必须留存引用，
+    #: 不能只累加计数。
+    written_events: list[Event] = []
     for event in batch.events:
         ref = event.resourceRef
         global_resource_id, is_placeholder = _resolve_resource_id(
@@ -255,23 +259,35 @@ def ingest_batch(
         # 脱敏：raw 递归清理，message 掩码连接串与密钥形态
         raw = _redact_raw(event.raw)
 
-        session.add(
-            Event(
-                id=f"evt_{ULID()}",
-                occurred_at=event.occurredAt,
-                received_at=now,
-                source="probe",
-                resource_id=global_resource_id,
-                type=event.type,
-                severity=event.resolved_severity(),
-                message=mask_secrets_in_text(event.message) if event.message else None,
-                metrics=event.metrics,
-                raw=raw,
-                trace_id=event.traceId,
-                batch_id=batch.batchId,
-            )
+        written = Event(
+            id=f"evt_{ULID()}",
+            occurred_at=event.occurredAt,
+            received_at=now,
+            source="probe",
+            resource_id=global_resource_id,
+            type=event.type,
+            severity=event.resolved_severity(),
+            message=mask_secrets_in_text(event.message) if event.message else None,
+            metrics=event.metrics,
+            raw=raw,
+            trace_id=event.traceId,
+            batch_id=batch.batchId,
         )
+        session.add(written)
+        written_events.append(written)
         accepted_events += 1
+
+    # ---- 告警引擎：对**本批新写入的事件**求值 ----
+    #
+    # 位置是刻意的：在事件写入之后、批次行落库之前。
+    #   - 之后：规则需要事件已带 id（`evidenceEventIds` 必填，红线）
+    #   - 之前：摘要因此成为幂等缓存的一部分，重复批次会回放同样的告警计数
+    #
+    # 传入的是本批**新写入**的事件，不是"窗口内的事件" —— 重复批次在函数开头
+    # 就已回放返回，不会走到这里，因此 `count` 不会被重复投递灌水。
+    #
+    # 与事件同事务：告警和支撑它的事件要么一起可见，要么一起不可见。
+    alert_evaluation = evaluate_events(session, written_events, now=now)
 
     result = IngestResult(
         batchId=batch.batchId,
@@ -283,6 +299,7 @@ def ingest_batch(
         resources=resource_results,
         rejected=rejected,
         acceptedUnknownTypes=unknown_types,
+        alerts=alert_evaluation.as_dict(),
     )
 
     # ---- 记录批次（供幂等回放）----

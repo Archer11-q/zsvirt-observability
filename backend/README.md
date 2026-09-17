@@ -26,7 +26,7 @@
 | `app/normalize/` | ✅ 资源 ID 拼装 + 脱敏管道（与探针共享 `shared/sensitive_vectors.json`） |
 | `app/events/` | ✅ 事件存储（只追加）+ keyset 游标分页 |
 | `app/ingest/` | ✅ `POST /api/v1/ingest/batch`（A 的 Q1–Q7 全部落地：幂等、限流、时钟漂移） |
-| `app/alerts/` | 🔶 状态机 / 静默 / 聚合计数 / 批量操作完成；**规则求值未做**（见 `../docs/DEVELOPMENT_PLAN.md` 任务 2） |
+| `app/alerts/` | ✅ **告警引擎已完成**：14 条声明式规则（覆盖三类赛题场景 + 平台自监控）、聚合去重、证据绑定、静默、自动恢复 |
 | `app/diagnosis/` | ✅ 引擎（五步流程、规则求值、置信评分）+ **服务层（装配上下文 → 落库）** |
 | `app/api/` | ✅ **16 个契约端点全部落地**（见下） |
 | `app/zsvirt/` | ⬜ ZSvirt 适配层（等命题方提供 API 文档，见 `../docs/DECISIONS.md` §8） |
@@ -52,7 +52,45 @@ GET  /api/v1/diagnosis/{id}                 诊断详情（`?includeEvidence=tru
 POST /api/v1/diagnoses                      手动触发诊断（`{alertId}` 或 `{anchorResourceId, window}`）
 ```
 
-测试规模：**406 通过 / 1 跳过**（真实 PostgreSQL 测试库上运行），`ruff check` 全绿。
+测试规模：**449 通过 / 1 跳过**（真实 PostgreSQL 测试库上运行），`ruff check` 全绿。
+
+---
+
+## 告警引擎（`app/alerts/`）
+
+与诊断引擎同一条立场：**规则是数据，不是代码分支**（`alerts/rules.py`）。
+新故障场景 = 新增规则数据，不改求值逻辑。
+
+```
+事件写入 ──▶ evaluate_events ──▶ 新建 / 累加 / 静默跳过
+                                     │
+                     （与事件同一事务）│
+                                     ▼
+                              alert 表 + evidenceEventIds
+                                     │
+        reconcile ───────────────────┘  超恢复窗口 → resolved + resolvedAt
+```
+
+四条硬约束（都有测试）：
+
+1. **证据必填** —— `evidenceEventIds` 非空；引擎与数据库 CHECK 双重强制。
+2. **聚合去重** —— 同一 `{ruleId}:{resourceId}` 只累加 `count` 与证据，不新建。
+   一个持续故障刷出上千条告警是告警系统最常见的失败方式。
+3. **静默 ≠ 已恢复** —— 静默期内"没有新证据"是"我们没在听"，不能推断问题消失。
+   释放静默时把 `lastFiredAt` 重新基准化到释放时刻（D-083）。
+4. **复发新建** —— 已恢复的告警再次触发时新建一条，保留旧记录自己的
+   `resolvedAt`，否则"复发"与"从未恢复"无法区分。
+
+上报响应会带回告警摘要（`data.alerts`），探针不必轮询 `GET /api/v1/alerts`：
+
+```json
+{ "created": 2, "updated": 0, "skippedSilenced": 0,
+  "rulesEvaluated": 14, "ruleSetVersion": "rs-alert-1.0.0" }
+```
+
+> **有意的范围边界**：不支持 `durationSec` 这类**持续时间条件** —— 那需要跨批次
+> 状态记忆（流式窗口）。声明了却不生效的条件比没有这个字段更危险，所以宁可
+> 不做（D-087）。
 
 ---
 
