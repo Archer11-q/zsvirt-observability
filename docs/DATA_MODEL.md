@@ -103,28 +103,80 @@ ai_service:probe:9d1c...:vllm
 | `kind` | enum | ✅ | 资源类型 |
 | `name` | string | ⬜ | 展示名，可能重复，**不得用作标识** |
 | `parentId` | string \| null | ⬜ | 上级资源 ID，构成层级 |
-| `status` | enum | ✅ | `running` \| `stopped` \| `error` \| `unknown` |
+| `status` | enum | ✅ | **业务状态**：`running` \| `stopped` \| `error` \| `unknown` |
+| `observability` | enum | ✅ | **B 的观测状态**：`active` \| `stale` \| `gone` |
 | `firstSeenAt` | timestamp | ✅ | B 首次观测到该资源的时间 |
 | `lastSeenAt` | timestamp | ✅ | B 最近一次观测到该资源的时间 |
+| `staleness` | string \| null | ⬜ | 距上次观测的时长，如 `"10m"` |
 | `attributes` | object | ⬜ | 类型特有属性（见下） |
 | `labels` | object | ⬜ | 键值标签 |
 
-> `status = unknown` 是一等公民：远程系统不可达时必须显式降级，不得伪造 `running`。
+> **⚠️ `status` 与 `observability` 是两个独立字段，禁止混用**（修正成员 C 在 `frontend/FRONTEND_DESIGN.md` §2 Q14 提出的字段歧义）。
+>
+> | 字段 | 谁产生 | 语义 | 消费方 |
+> |---|---|---|---|
+> | `status` | **来源系统**（ZSvirt 或探针） | 资源"本身"的业务状态 | 前端状态标签与颜色 |
+> | `observability` | **B** | B 对"自己观测能力"的判断 | 排障、`includeStale` 过滤 |
+>
+> 举例：一个 VM 被 ZSvirt 报告为 `status = running`，但探针断线 20 分钟 →
+> `status = running`, `observability = stale`。**两者同时为真是正常的**，这正是不该合并的原因。
+>
+> `status = unknown` 是一等公民：来源系统不可达时必须显式降级，**不得伪造 `running`**。
 
 ### 4.2 类型特有属性（`attributes`）
 
-| kind | 关键属性 | 状态 |
-|---|---|---|
-| `host` | `cpuCores`, `memTotalBytes`, `agentVersion`, `clusterId` | 【待确认】以 ZSvirt 实际字段为准 |
-| `gpu` | `vendor`, `model`, `memTotalBytes`, `memUsedBytes`, `utilizationPct`, `temperatureC` | 【待确认】 |
-| `vgpu` | `profile`, `memQuotaBytes`, `ownerVmId` | 【待确认】 |
-| `vm` | `uuid`, `vcpu`, `memBytes`, `hostId`, `state`, `ipAddresses[]` | 【待确认】 |
-| `container` | `image`, `runtime`, `restartCount`, `cpuLimit`, `memLimitBytes` | 【待确认】 |
-| `process` | `pid`, `ppid`, `cmdline`, `rssBytes`, `cpuPct` | 【待确认】 |
-| `ai_service` | `framework`, `modelName`, `endpoint`, `concurrency`, `qps` | 【待确认】 |
-| `agent` | `agentType`, `sessionId`, `taskRef` | 【待确认】 |
+> **来源标注规则**（依据 ZSvirt 源码 `ZSvirt/zsvirt` 实测 + 成员决策 2026-09-17）：
+>
+> | 标记 | 含义 |
+> |---|---|
+> | `[ZSvirt-资产]` | 来自 ZSvirt 的 GPU/资源**资产** API（`QueryGpuDevice` / `QueryMdevDevice` / `QueryVmInstance`）—— **只有静态资产字段** |
+> | `[ZWatch]` | 来自 ZSvirt `zwatch` 监控模块的**指标** API（**premium 模块，需确认测试环境是否启用**） |
+> | `[探针]` | 来自成员 A 的 VM 内探针（访客视角） |
+> | `[模拟]` | 来自 B 的模拟/降级 Provider（赛题明文要求支持） |
 
-**所有 `attributes` 中的字段均为 TBD**：须以 ZSvirt API 实际返回与 A 探针实际采集能力为准，成员 B 不预设。
+| kind | 关键属性 | 来源 | 状态 |
+|---|---|---|---|
+| `host` | `cpuCores`, `memTotalBytes`, `clusterId` | `[ZSvirt-资产]` | 【待确认】以实际返回为准 |
+| `gpu` | `serialNumber`, `memTotalBytes`（显存容量）, `power`, `isDriverLoaded`, `pciAddress`, `model` | `[ZSvirt-资产]` | ⚠️ **源码已证实：`QueryGpuDevice` 只有这些静态字段，没有利用率/实时占用/温度** |
+| `gpu` | `utilizationPct`, `memUsedBytes`, `temperatureC` | `[ZWatch]` | ⚠️ **依赖 premium `zwatch`；若测试环境不启用则不可得** |
+| `gpu` | `memUsedBytes`（访客可见的 vGPU 占用）, `processes[]` | `[探针]` | 仅当 vGPU 透传且 VM 内可用 `nvidia-smi` 时可得 |
+| `vgpu` | `profile`, `memQuotaBytes`, `ownerVmId`, `mdevType` | `[ZSvirt-资产]` | `QueryMdevDevice` / `QueryVmInstanceMdevDeviceSpecRef` |
+| `vm` | `uuid`, `vcpu`, `memBytes`, `hostId`, `state`, `ipAddresses[]` | `[ZSvirt-资产]` | 【待确认】 |
+| `container` | `image`, `runtime`, `restartCount`, `cpuLimit`, `memLimitBytes`, `oomKilledCount` | `[探针]` | 【待确认】 |
+| `process` | `pid`, `ppid`, `cmdline`, `rssBytes`, `cpuPct` | `[探针]` | 【待确认】 |
+| `ai_service` | `framework`, `modelName`, `endpoint`, `concurrency`, `qps` | `[探针]` | 【待确认】 |
+| `agent` | `agentType`, `sessionId`, `taskRef` | `[探针]` | 【待确认】 |
+
+**除 GPU 外，其余 `attributes` 仍为 TBD**：须以 ZSvirt API 实际返回与 A 探针实际采集能力为准，成员 B 不预设。
+
+#### 4.2.1 GPU 数据的可插拔 Provider 设计（【已确认】，2026-09-17）
+
+**决策**：GPU/vGPU 数据采用**三层分工 + 可插拔 Provider**。
+
+| 层 | 数据 | 来源 | 角色 |
+|---|---|---|---|
+| **L1 资产层** | GPU 型号、显存容量、序列号、vGPU 切分、VM↔vGPU 绑定 | ZSvirt `QueryGpuDevice` / `QueryMdevDevice` | **权威**。回答"谁的卡、切给谁" |
+| **L2 性能层** | GPU 利用率、显存占用、温度、功耗 | ZWatch metric API | 若测试环境提供 |
+| **L3 访客层** | VM 内可见的 vGPU 显存 total/used、占用进程 | A 探针在 VM 内执行 `nvidia-smi` | **交叉验证** |
+| **降级层** | 模拟 GPU 指标 | B 的 `SimulatedProvider` | **赛题明文要求**，解决开发机无 GPU |
+
+**为什么必须同时做 L1 + L2/L3（GPU 归因的关键）**：
+
+> 只采一个来源时，诊断无法区分下面两种情况 —— 而这正是赛题「创新性」维度点名的 **GPU 归因**：
+>
+> | 主机 GPU 显存 | 本 VM 的 vGPU 占用 | 根因推断 | 建议 |
+> |---|---|---|---|
+> | 98% | 20% | **邻居干扰**（同宿主其他 VM 抢占） | 检查同宿主其他 VM 的 vGPU 配额 |
+> | 98% | 95% | **自身超配** | 降低并发 / 限制 batch size |
+>
+> 单一来源会让这两种情况看起来完全一样，导致错误归因。
+
+**实现约束**：`zsvirt-adapter` 内定义 `GpuMetricsProvider` 接口，提供 `ZWatchProvider` / `GuestSmiProvider` / `SimulatedProvider` 三个实现，由配置切换。
+
+**诚实性红线**：
+1. `GET /api/health` 的 `gpuProvider.mode` 必须暴露当前渠道（`zsvirt-zwatch` / `guest-smi` / `simulated`）。
+2. **模拟数据必须可识别**，不得伪装成真实采集数据进入诊断证据链而不加标记。
+3. 若 L2 不可得，GPU 利用率类证据在 `Diagnosis.evidence` 中必须标注来源为模拟，或该规则不参与评分。
 
 ---
 
@@ -222,31 +274,53 @@ Diagnosis *──* Event / 指标观测（evidence）
 
 ## 7. 生命周期与状态语义
 
+> **重要**：本节的 `active` / `stale` / `gone` 属于资源的 **`observability` 字段**（B 的观测状态），
+> **不是** `status` 字段。二者关系见 §4.1。
+
 | 对象 | 状态机 |
 |---|---|
-| Resource | `discovered → active → stale → gone`（`stale` 由 `lastSeenAt` 超时判定，**不立即删除**） |
+| Resource `observability` | `active → stale → gone`（`stale` 由 `lastSeenAt` 超时判定，**不立即删除**） |
+| Resource `status` | 由来源系统给出：`running` / `stopped` / `error` / `unknown` |
 | Alert | `firing → acked → resolved`；旁路 `firing → silenced` |
 | Event | 无状态，只追加，永不修改 |
 | Diagnosis | 一次性生成，可被新诊断取代；**不修改既有记录** |
 
-**删除策略**：资源不物理删除，只标记 `gone` 并保留历史，否则历史事件会变成孤儿，破坏可追溯性。【提案】
+**删除策略**：资源不物理删除，只标记 `gone` 并保留历史，否则历史事件会变成孤儿，破坏可追溯性。
 
 ---
 
-## 8. 未决问题（阻塞契约冻结）
+## 8. 事件类型枚举（草案，待三方冻结）
 
-1. `vGPU` 是否为独立实体（R1）。
-2. ZSvirt 对各资源类型实际暴露的字段清单（R4）。
-3. A 探针生成 `container` / `process` / `ai_service` / `agent` 原生 ID 的规则（R5）。
-4. `task` 是否纳入首版模型。
-5. 事件 `type` 的完整枚举——**必须三方共同定义**，因为它是跨层关联的锚点。
-6. 时间容差窗口取值。
-7. 是否需要多租户 / 权限维度。
+> 这是跨层关联的锚点。命名规范 `{domain}.{subject}.{qualifier}`，全小写点分。
+> **最终枚举需三方共同确认，并同步到 `GET /api/v1/dict` 的 `eventType`。**
+
+| 故障场景（赛题分类） | 事件类型草案 |
+|---|---|
+| **容器/进程异常** | `container.oom_killed`、`container.restart`、`process.crash`、`process.io_wait.high` |
+| **GPU / 资源瓶颈** | `gpu.memory.exhausted`、`gpu.utilization.high`、`vgpu.quota.exceeded`、`vm.disk.io_saturated` |
+| **应用/Agent 任务异常** | `inference.timeout`、`inference.error`、`agent.task.failed`、`agent.network.timeout`、`container.network.unreachable` |
 
 ---
 
-## 9. 变更记录
+## 9. 未决问题
+
+| # | 问题 | 状态 |
+|---|---|---|
+| 1 | `vGPU` 是否为独立实体 | ⚠️ 源码表明确有 `MdevDevice` 概念，倾向**是**；仍需确认测试环境字段 |
+| 2 | ZSvirt 对各资源类型实际暴露的字段清单 | ❌ 阻塞（Q15–Q20） |
+| 3 | A 探针 `sourceId` 生成规则 | ✅ **已确认**（见 `API_CONTRACT.md` §3.3.1） |
+| 4 | `task` 是否纳入首版模型 | ❌ 待定 |
+| 5 | 事件 `type` 完整枚举 | ⚠️ 草案见 §8，待三方冻结 |
+| 6 | 时间容差窗口取值 | ✅ **已确认 ±30s**（A 无异议） |
+| 7 | 是否需要多租户 / 权限维度 | ❌ 待定（赛题提到"租户或项目"关联，可能纳入） |
+| 8 | `status` 与 `observability` 字段歧义 | ✅ **已修正**（§4.1，采纳 C 的质疑） |
+| 9 | GPU 指标渠道（ZWatch 是否可用） | ❌ 待命题方确认 |
+
+---
+
+## 10. 变更记录
 
 | 版本 | 日期 | 变更 | 状态 |
 |---|---|---|---|
 | v0.1 | 2026-09-16 | 首轮草案：资源层级、ID 方案提案、Event/Alert/Diagnosis 字段、生命周期 | DRAFT，待评审 |
+| v0.2 | 2026-09-17 | **修正 C 指出的字段歧义**：拆分 `status`（业务）与 `observability`（观测），新增 `staleness`；**修正 GPU 字段来源**（源码证实 `QueryGpuDevice` 无利用率/实时占用），新增 §4.2.1 可插拔 Provider 设计；关闭 `sourceId` 与时间窗口待确认项；新增 §8 事件类型枚举草案（含容器 OOM） | 已确认 |

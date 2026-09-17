@@ -74,10 +74,35 @@
 | 组件 | 版本 | 本机现状 | 动作 |
 |---|---|---|---|
 | PostgreSQL | 【待确认】建议 16.x | **未安装** | 需安装（本机或远程） |
-| ZSvirt | 【阻塞】版本未知 | 远程，不在本机 | 需成员提供 |
-| 容器运行时 | 【待确认】 | **Docker 在本 WSL 不可用** | 见 §4 R2 |
+| ZSvirt | **上游 `VERSION` = 1.0.0**（GPLv3，Java/Maven）；目标集群版本【阻塞】未知 | 远程，不在本机 | 需向**命题方**索取 API/SDK 文档与测试环境账号 |
+| Prometheus / Grafana / OTel / Jaeger | **不引入** | — | **【已确认】2026-09-17**，理由见 `ADR-0003` |
+| 容器运行时 | 【待确认】 | **Docker 在本 WSL 不可用** | 见 §4 R2（已降级：B 自身不强制容器化） |
 | 操作系统 | Ubuntu 26.04 LTS | 一致 | — |
 | Git | 2.53.0 | 一致 | — |
+
+### 2.4 ZSvirt 平台能力边界（2026-09-17 由源码实测得出）
+
+> 来源：`github.com/ZSvirt/zsvirt`（clone 后阅读源码，非推测）。版本 `1.0.0`，许可证 **GPLv3**。
+
+| 能力 | 是否可得 | 依据 | 用途 |
+|---|---|---|---|
+| 宿主机 / VM 资源清单 | ✅ 预计可得 | `QueryVmInstance`、`QueryHost` 等标准查询 API | Pull 路径的资源图 |
+| **GPU 资产**（序列号、显存容量、功耗、驱动状态） | ✅ 可得 | `premium/mevoco/.../gpu/GpuDeviceVO.java` —— 字段仅 `serialNumber` / `memory` / `power` / `isDriverLoaded` | GPU 归属与资产层 |
+| **vGPU / MDEV 切分与 VM 绑定** | ✅ 可得 | `QueryGpuDevice`、`QueryMdevDevice`、`QueryVmInstanceMdevDeviceSpecRef` | vGPU 归属 |
+| **GPU 利用率 / 显存占用 / 温度** | ⚠️ **不在资产 API 中** | `GpuDeviceVO` **没有** `utilization` / `memUsed` / `temperature` 字段 | 需 ZWatch 或探针，见下 |
+| 指标（metric） | ⚠️ **依赖 premium `zwatch`** | `zwatch` 目录 604 个 Java 文件，含 `APIGetMetricDataMsg`、`APIGetAllMetricMetadataMsg` | GPU 性能层 |
+| 告警（alarm） | ⚠️ **依赖 premium `zwatch`** | `APIQueryAlarmMsg`、`APIGetAlarmDataMsg`、`APIQueryActiveAlarmMsg` | 赛题所说的"ZSvirt 告警" |
+| 事件（event） | ⚠️ **依赖 premium `zwatch`** | `APIQueryEventSubscriptionMsg`、`APIGetEventDataMsg` | 跨层关联的事件源 |
+| Prometheus 集成 | ⚠️ premium | `APIGetPrometheusMetricLabelValueMsg`、`APICreateMetricDataHttpReceiverMsg` | 备选指标通道 |
+
+**两条关键结论**：
+
+1. **GPU 资产可见，GPU 性能不可见（通过资产 API）** —— `QueryGpuDevice` 只回答"谁的卡、切给谁、多大显存"，
+   **不回答**"现在用了多少"。这直接决定了 `DATA_MODEL.md` §4.2.1 的三层 Provider 设计。
+2. **监控告警子系统 `zwatch` 位于 `premium/` 目录** —— 赛题禁止「不可验证的闭源服务作为核心能力」，
+   因此**必须向命题方确认测试环境是否启用 ZWatch 及其权限**（风险 R9）。
+
+**认证方式**：ZSvirt / ZStack 系使用 OAuth Token（请求头 `Authorization: OAuth <token>`）。
 
 ---
 
@@ -126,6 +151,8 @@
 | R1 | 无 GPU 设备 | 无法直接验证 GPU/vGPU 关联 | GPU 数据须来自 ZSvirt API 或 A 上报（见 `ARCHITECTURE.md` §2.1） |
 | R8 | PostgreSQL 未安装 | B2 无法落库 | 需安装或使用远程实例【待确认】 |
 | R6 | `.gitignore` 含 **C/C++ + CMake + vcpkg** 块 | 曾与 Python 基线看似不一致 | ✅ **已决策：保留，不删除**（成员 A 可能使用 C/C++）。已在该块上方加注释说明用途 |
+| R9 | **`zwatch` 监控模块位于 ZSvirt 的 `premium/` 目录** | GPU 性能指标与 ZSvirt 告警可能不可得；赛题禁止"不可验证的闭源服务作为核心能力" | ❌ **需向命题方确认**测试环境是否启用 ZWatch 及最小权限 |
+| R10 | ZSvirt 上游 `VERSION` 为 **1.0.0**，但目标集群实际版本未知 | API 兼容性无法预先验证 | ❌ 需命题方提供集群版本与 API 文档 |
 
 ---
 
@@ -158,3 +185,4 @@
 |---|---|---|---|
 | v0.1 | 2026-09-16 | 首轮草案：确认项、版本矩阵、环境勘测、风险清单 | DRAFT，待评审 |
 | v0.2 | 2026-09-16 | 成员决策：**Python 锁定 3.12.x**（不用 3.14）；**`.gitignore` 保留 C/C++ 块**；补充 Node/npm 规则 | DRAFT，待评审 |
+| v0.3 | 2026-09-17 | 新增 **§2.4 ZSvirt 平台能力边界**（源码实测）：确认 GPU **资产** API 存在但**性能**指标不在其中；确认 `zwatch` 监控告警为 **premium** 模块；确认 ZSvirt 上游版本 1.0.0 / GPLv3；确认不引入 Prometheus/Grafana/OTel；风险表新增 R9 / R10 | 已确认 |

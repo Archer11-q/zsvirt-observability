@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | **Proposed（待三方确认）** |
+| 状态 | **Accepted（2026-09-17 由 Proposed 转正）** |
 | 日期 | 2026-09-16 |
 | 决策人 | 成员 B 提案，需成员 A、C 确认 |
 | 影响范围 | `DATA_MODEL.md`、`API_CONTRACT.md`、A 探针侧 ID 生成、C 前端 ID 处理 |
@@ -74,15 +74,45 @@ ai_service:probe:<agentId>:vllm
 ### 负面 / 代价
 
 - ID 字符串较长，索引体积略增。
-- 需要成员 A 明确探针侧 `sourceId` 的生成规则（**目前未确认，是本 ADR 的阻塞点**）。
+- 需要成员 A 明确探针侧 `sourceId` 的生成规则 —— ✅ **已解决**（2026-09-16，见下方「决策更新」）。
 - 需要 C 遵守"ID 不透明"约定，不能在前端做字符串切割。
 
 ### 需要后续跟进
 
-1. 成员 A 确认探针侧 `sourceId` 生成规则（必须稳定且在同一 agent 内唯一）。
-2. 成员 C 确认接受不透明 ID 约定。
-3. 确认 `vgpu` 是否作为独立 kind（取决于 ZSvirt 建模方式）。
-4. 确认 `task` 是否纳入首版。
+1. ~~成员 A 确认探针侧 `sourceId` 生成规则~~ → ✅ **A 已给出规则**，见下方「决策更新」。
+2. 成员 C 确认接受不透明 ID 约定 —— ✅ **C 已遵守**（`frontend/FRONTEND_DESIGN.md` §2 Q14 明确"遵守不解析 ID"）。
+3. 确认 `vgpu` 是否作为独立 kind —— ⚠️ ZSvirt 源码表明确有 `MdevDevice` 概念，倾向**是**；仍需测试环境字段确认。
+4. 确认 `task` 是否纳入首版 —— ❌ 待定。
+
+---
+
+## 决策更新（2026-09-16 / 2026-09-17）
+
+### 状态变更
+
+| 项 | 变更 |
+|---|---|
+| 状态 | `Proposed` → **`Accepted`** |
+| 依据 | ① 成员 A 在 `agents/docs/REPORTING_CONTRACT.md` §3 给出 `sourceId` 生成规则，**关闭本 ADR 的唯一阻塞点**；② 成员 C 明确遵守"ID 不透明"约定 |
+| 生效 | 已回写至 `API_CONTRACT.md` §3.3.1 与 `DATA_MODEL.md` §3 |
+
+### 探针侧 `sourceId` 生成规则（成员 A 确认）
+
+| kind | 规则 | 稳定性来源 |
+|---|---|---|
+| `container` | 容器 ID 前 12 位（或容器名，若唯一） | 容器生命周期内不变 |
+| `process` | `starttime + pid`（取自 `/proc/<pid>/stat`） | **避免 pid 复用冲突** |
+| `ai_service` | 服务名 + 监听端口 | 服务实例稳定标识 |
+| `agent` | 探针分配的 ULID | 全局唯一 |
+| `task` | 探针分配的 ULID | 全局唯一 |
+
+统一要求：**同一 `agentId` 内唯一、生命周期内不变**。`agentId` 形如 `probe-<vm-uuid 前 8 位>`。
+
+**B 侧拼装方式**：`{kind}:probe:{agentId}:{sourceId}`
+例：`container:probe:probe-3f2a9c10:web-0`
+
+> **设计确认点**：A 选择 `starttime + pid` 而非裸 `pid`，正确规避了容器内 pid 复用导致的
+> ID 漂移 —— 这是本方案能成立的关键细节，已在 `DATA_MODEL.md` §3.3 的"ID 不可变"约束下验证通过。
 
 ## 回滚方案
 

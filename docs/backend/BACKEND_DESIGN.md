@@ -52,15 +52,52 @@ def accept_batch(payload: IngestBatch) -> IngestResult: ...
 |---|---|
 | Schema 校验、鉴权（【待确认】）、限流、幂等去重（按 `batchId`）、脏数据隔离 | 不做字段语义改写；不决定 A 的探针实现 |
 
-**关键行为**：部分接受。被拒条目必须返回 `reason` + `detail`，**不得静默丢弃**。
+**关键行为**（依据成员 A 的 Q1–Q7 答复，见 `API_CONTRACT.md` §3.3）：
+
+1. **`batchId` 幂等去重**：重复批次返回 `duplicate: true` 与**与首次一致**的结果，HTTP 仍为 `200`（**不得判定为脏数据**）。
+2. **逐条返回 resource 接受结果**：响应含 `resources[]`，带 `globalId`，供 A 维护「已确认资源」缓存。
+3. **限流**：超阈值返回 `429 RATE_LIMITED` + `Retry-After`。
+4. **时钟漂移监测**：按 `receivedAt − sentAt` 计算，超 `CLOCK_DRIFT_WARN_MS`（默认 5000ms）时 `ingest.status` 转 `degraded`。
+5. **迟到批次**：**按 `occurredAt` 追加写入**，不得因时间早于当前而丢弃或误告警。
+6. **敏感信息过滤**：`normalize` 之前先过脱敏管道（见 [`../SENSITIVE_DATA.md`](../SENSITIVE_DATA.md)）。
+7. **可选鉴权**：若启用 `API_AUTH_TOKEN`，未带/带错返回 `401 UNAUTHENTICATED`。
 
 ### 2.2 `zsvirt`（L1，出站）
 
 | 职责 | 不负责 |
 |---|---|
-| 查询 ZSvirt 资源清单与平台事件；认证与重试退避；失败时保留上次快照并标记陈旧度 | **不把 ZSvirt SDK 类型泄漏到 L2 以上**（必须在边界处转成内部模型） |
+| 查询 ZSvirt 资源清单与平台事件；认证（OAuth Token）与重试退避；失败时保留上次快照并标记陈旧度 | **不把 ZSvirt SDK 类型泄漏到 L2 以上**（必须在边界处转成内部模型） |
 
 **这是全系统唯一的 ZSvirt 耦合点。** 若 ZSvirt 升级波及 L2 以上，即为分层破坏。
+
+**能力边界**（源码实测，见 `../TECH-BASELINE.md` §2.4）：
+
+| 子能力 | 接口 | 状态 |
+|---|---|---|
+| 资源清单（host / vm） | `QueryHost` / `QueryVmInstance` 等 | 待确认实际字段 |
+| **GPU 资产** | `QueryGpuDevice` | ✅ 存在；**仅静态字段**（序列号/显存容量/功耗/驱动状态） |
+| **vGPU 切分与绑定** | `QueryMdevDevice` / `QueryVmInstanceMdevDeviceSpecRef` | ✅ 存在 |
+| **GPU 性能指标** | ⚠️ **不在资产 API 中** | 需 ZWatch（premium）或探针，见 §2.2.1 |
+| 平台告警 / 事件 | `zwatch` alarm / event API | ⚠️ premium 模块，待确认可用性 |
+
+#### 2.2.1 `GpuMetricsProvider`（可插拔，【已确认】）
+
+```python
+class GpuMetricsProvider(Protocol):
+    def mode(self) -> str: ...                       # zsvirt-zwatch | guest-smi | simulated
+    def fetch(self, gpu_ids: list[str]) -> list[GpuMetric]: ...
+```
+
+| 实现 | 数据来源 | 用途 |
+|---|---|---|
+| `ZWatchProvider` | ZSvirt `zwatch` metric API | 主机侧 GPU 利用率 / 显存占用 / 温度（若测试环境启用） |
+| `GuestSmiProvider` | 探针在 VM 内执行 `nvidia-smi` 后上报 | 访客侧 vGPU 占用（交叉验证） |
+| `SimulatedProvider` | 内置模拟数据 | **赛题明文要求的降级模式**，保证无 GPU 也能复现 |
+
+**为什么必须支持多来源**：单一来源无法区分「主机显存被邻居占满」与「本 VM 自身超配」，
+而这是赛题「创新性」维度点名的 **GPU 归因**能力。详见 [`../DATA_MODEL.md`](../DATA_MODEL.md) §4.2.1。
+
+**诚实性红线**：`/api/health` 必须暴露 `gpuProvider.mode`；模拟数据不得伪装成真实采集。
 
 ### 2.3 `normalize`（L1）
 
@@ -71,13 +108,15 @@ def to_event(raw, resource_ref) -> Event: ...
 
 | 职责 | 不负责 |
 |---|---|
-| 拼装全局 ID（`DATA_MODEL.md` §3）、统一时间语义、统一严重级别枚举、缺失字段留 `null` | **不填补缺失字段**；不猜测来源没给的信息 |
+| 拼装全局 ID（`DATA_MODEL.md` §3）、统一时间语义、统一严重级别枚举、**敏感字段过滤与脱敏**、缺失字段留 `null` | **不填补缺失字段**；不猜测来源没给的信息 |
+
+**ID 拼装（已确认）**：`{kind}:probe:{agentId}:{sourceId}`，`sourceId` 规则见 `API_CONTRACT.md` §3.3.1。
 
 ### 2.4 `graph`（L3）
 
 | 职责 | 不负责 |
 |---|---|
-| 节点与边的增删改、`parentId` 关系维护、上下游检索、`stale`/`gone` 生命周期、影响范围传播 | 不自行编造资源关系；不物理删除节点 |
+| 节点与边的增删改、`parentId` 关系维护、上下游检索、`observability` 生命周期（`active`/`stale`/`gone`）、影响范围传播 | 不自行编造资源关系；不物理删除节点；**不修改 `status`**（那是来源系统的字段） |
 
 ### 2.5 `events`（L2）
 
@@ -173,3 +212,4 @@ api ──▶ alerts ──▶ graph ──▶ events ──▶ normalize ──
 | 版本 | 日期 | 变更 | 状态 |
 |---|---|---|---|
 | v0.1 | 2026-09-16 | 首轮骨架：代码组织、模块契约、依赖方向、错误处理、测试要求 | DRAFT，待评审 |
+| v0.2 | 2026-09-17 | `ingest` 补齐 A 已确认的 7 项行为（幂等、逐条结果、限流、时钟漂移、迟到批次、脱敏、鉴权）；`zsvirt` 新增**能力边界表**与 **`GpuMetricsProvider` 可插拔设计**（§2.2.1）；`normalize` 增加脱敏职责；`graph` 明确只管 `observability` 不管 `status` | 已确认 |

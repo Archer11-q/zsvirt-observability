@@ -51,5 +51,10 @@ ADR 属于第 3 优先级（见团队控制协议 §6）：
 | 编号 | 标题 | 状态 |
 |---|---|---|
 | [0001](0001-python-fastapi-postgres-baseline.md) | 后端技术基线选定 Python + FastAPI + PostgreSQL | **Accepted**（成员已确认） |
-| [0002](0002-resource-id-scheme.md) | 资源 ID 采用 `{kind}:{source}:{sourceId}` 方案 | **Proposed**（待三方确认） |
-| [0003](0003-minimal-runtime-dependencies.md) | 运行时依赖最小化：不引入消息队列与搜索引擎 | **Accepted**（成员已确认） |
+| [0002](0002-resource-id-scheme.md) | 资源 ID 采用 `{kind}:{source}:{sourceId}` 方案 | **Accepted**（2026-09-17 转正：A 给出 `sourceId` 规则，C 确认不解析 ID） |
+| [0003](0003-minimal-runtime-dependencies.md) | 运行时依赖最小化：不引入消息队列与搜索引擎 | **Accepted**（2026-09-17 扩展至 Prometheus / Grafana / OTel / Jaeger） |
+
+> **2026-09-17 状态变化说明**：ADR-0002 由 `Proposed` 转 `Accepted` —— 其唯一阻塞点
+> （探针侧 `sourceId` 生成规则）已由成员 A 在 `agents/docs/REPORTING_CONTRACT.md` §3 解决。
+> ADR-0003 的适用范围同日扩大：成员决策**不引入**赛题"可使用"的 Prometheus / Grafana /
+> OpenTelemetry / Jaeger，理由是「稳定性与可复现性」为评分项（15%），自建栈的可复现性更优。

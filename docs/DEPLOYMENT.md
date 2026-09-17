@@ -68,20 +68,44 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 
 ---
 
-## 4. 配置项（【待确认】草案）
+## 4. 配置项
+
+> 标注 `[A已确认]` 的项来自成员 A 的 `agents/docs/REPORTING_CONTRACT.md`。
 
 | 变量 | 用途 | 必填 | 示例 |
 |---|---|---|---|
 | `DATABASE_URL` | PostgreSQL 连接串 | ✅ | `postgresql+psycopg://user:pass@localhost:5432/zsvirt_obs` |
 | `API_HOST` / `API_PORT` | 监听地址与端口 | ✅ | `0.0.0.0` / `8080` |
 | `ZSVIRT_ENDPOINT` | ZSvirt API 地址 | ✅ | 【待确认】 |
-| `ZSVIRT_AUTH_*` | ZSvirt 凭据 | ✅ | **禁止提交真实凭据** |
-| `ZSVIRT_SYNC_INTERVAL_SEC` | 平台清单同步周期 | ⬜ | `30` |
-| `INGEST_BATCH_MAX` | 单批上报上限 | ⬜ | `1000` |
-| `DIAG_WINDOW_TOLERANCE_SEC` | 跨层关联容差 | ⬜ | `30` |
+| `ZSVIRT_AUTH_*` | ZSvirt 凭据（OAuth / 账号） | ✅ | **禁止提交真实凭据** |
+| `ZSVIRT_SYNC_INTERVAL_SEC` | 平台资源清单同步周期 | ⬜ | `30` |
+| **`GPU_PROVIDER`** | **GPU 指标渠道：`zsvirt-zwatch` \| `guest-smi` \| `simulated` \| `auto`** | ⬜ | 默认 `auto`；**无 GPU 环境必须能跑 `simulated`** |
+| **`SIMULATED_DATA_ENABLED`** | 是否启用模拟/降级数据（赛题明文要求） | ⬜ | `false`；演示兜底时 `true` |
+| `INGEST_BATCH_MAX` | 单批事件上限 `[A已确认]` | ⬜ | `1000` |
+| `INGEST_RESOURCE_MAX` | 单批资源上限 `[A已确认]` | ⬜ | `500` |
+| `INGEST_PAYLOAD_MAX_BYTES` | 单批载荷上限 `[A已确认]` | ⬜ | `1048576`（1MB） |
+| `INGEST_RATE_LIMIT_*` | 限流阈值（触发 `429`） `[A已确认]` | ⬜ | 【待定，A 需要明确值】 |
+| `CLOCK_DRIFT_WARN_MS` | 探针时钟漂移告警阈值 `[A已确认]` | ⬜ | `5000` |
+| `DIAG_WINDOW_TOLERANCE_SEC` | 跨层关联容差 `[已确认]` | ⬜ | `30` |
+| `API_AUTH_TOKEN` | 可选只读 Bearer Token（**默认空 = 关闭**） | ⬜ | 环境变量注入，不入仓库 |
+| `SENSITIVE_FILTER_ENABLED` | 敏感字段过滤开关（见 `SENSITIVE_DATA.md`） | ⬜ | `true` |
 | `LOG_LEVEL` | 日志级别 | ⬜ | `INFO` |
 
-**安全约定**：`.env` 必须加入 `.gitignore`；仓库内只提供 `.env.example`。**任何 token、密码、密钥、局域网地址不得进入仓库。**
+**安全约定**：`.env` 必须加入 `.gitignore`；仓库内只提供 `.env.example`。**任何 token、密码、密钥、局域网地址不得进入仓库**（完整规则见 [`SENSITIVE_DATA.md`](SENSITIVE_DATA.md)）。
+
+### 4.1 模拟 / 降级模式（赛题明文要求）
+
+赛题要求「支持模拟数据或最小化降级模式，以便在缺少特定 GPU 硬件时复现实验流程」。
+
+```bash
+# 无 GPU 环境的标准启动方式（开发机自测 / 评委复现）
+export GPU_PROVIDER=simulated
+export SIMULATED_DATA_ENABLED=true
+```
+
+**验收**：启动后 `GET /api/health` 的 `gpuProvider.mode` 必须为 `simulated`，
+且三类故障场景仍能完整走通（注入 → 告警 → 诊断 → 证据链）。
+**模拟数据必须可识别**，不得在诊断证据中伪装成真实采集（见 `ARCHITECTURE.md` §7.3）。
 
 ---
 
@@ -99,7 +123,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 
 | 端点 | 用途 |
 |---|---|
-| `GET /api/health` | 整体状态 + 各上游（数据库 / ZSvirt / 接入）分项状态，见 `API_CONTRACT.md` §4.6 |
+| `GET /api/health` | 整体状态 + 各上游（数据库 / ZSvirt / 接入 / GPU Provider）分项状态，见 `API_CONTRACT.md` §4.8 |
 
 **部署验收**：`curl -s localhost:8080/api/health` 返回 `status` 且能区分 `ok` / `degraded` / `down`；当 ZSvirt 不可达时状态应为 `degraded` 且给出 `staleness`，**不得假装正常**。
 
@@ -109,22 +133,25 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 
 | 项 | 状态 |
 |---|---|
-| ZSvirt 集群（远程） | 【待确认】访问方式 |
-| 至少一种容器化 AI 工作负载（跑在 ZSvirt VM 内） | 【待确认】由谁提供 |
-| VM 内探针（成员 A） | 【待确认】 |
-| 三类故障注入脚本 | 【待确认】见 `TEST_PLAN.md` |
-| 前端展示（成员 C） | 【待确认】 |
+| ZSvirt 集群（远程） | 【待确认】访问方式（向命题方索取） |
+| 至少一种容器化 AI 工作负载（跑在 ZSvirt VM 内） | 【待确认】由谁提供（成员 A 交付物） |
+| VM 内探针（成员 A） | 【待确认】A 的 `agents/` 实现 |
+| 三类故障注入脚本 | 【待确认】见 `TEST_PLAN.md` §3 |
+| 前端展示（成员 C） | 技术栈已定（React 18 + Vite + AntD 5 + ECharts 5），见 `frontend/FRONTEND_DESIGN.md` |
+| **模拟 / 降级模式** | **【已确认】必需**（赛题要求），配置见 §4.1 |
 | **一键启动 / 一键复现脚本** | **【待补充】交付要求之一** |
 
 ---
 
 ## 8. 已知环境阻塞
 
-1. 本机 Docker 不可用（Docker Desktop WSL 集成未开启）——是否影响交付待定。
+1. 本机 Docker 不可用（Docker Desktop WSL 集成未开启）——**已降级**：B 自身不强制容器化。
 2. 本机 PostgreSQL 未安装。
 3. 本机默认 Python 为 3.14.4，**项目已锁定 3.12**，需另装 3.12 并保持并存（安装方式待确认）。
 4. 本机 `pip3` 缺失。
-5. ZSvirt 集群接入方式与凭据未知——**阻塞 B1 设计落地**。
+5. ❌ **ZSvirt 集群接入方式与凭据未知** —— 阻塞 B1 设计落地，**需向命题方索取 API/SDK 文档与测试环境账号**。
+6. ⚠️ **GPU 性能指标渠道未知** —— ZSvirt 的 `zwatch` 监控模块位于 `premium/` 目录，需确认测试环境是否启用及其权限。**已有缓解**：模拟 Provider 保证无 GPU 也能跑通全流程。
+7. ⚠️ 本机无 GPU 设备（`/dev/nvidia*` 不存在）—— 真实 GPU 归因需远程环境验证。
 
 ---
 
@@ -134,3 +161,4 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 |---|---|---|---|
 | v0.1 | 2026-09-16 | 骨架：环境要求、搭建步骤草案、配置项草案、阻塞清单 | DRAFT |
 | v0.2 | 2026-09-16 | 按成员决策更新：Python 明确锁定 3.12.x，搭建步骤改为显式使用 `python3.12` | DRAFT |
+| v0.3 | 2026-09-17 | 配置项补齐 A 已确认的上报参数（批次上限 / 限流 / 时钟漂移）与 GPU Provider、认证、敏感过滤开关；新增 §4.1 模拟/降级模式；阻塞清单更新 | 已确认 |
