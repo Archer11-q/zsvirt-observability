@@ -208,23 +208,19 @@ def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
         )
 
     # ---- 影响范围 ----
+    # 复用 app.graph.algorithms.impact_scope —— 与资源图（L3）同一实现，
+    # 避免"引擎算出的影响范围"与"拓扑接口给出的影响范围"不一致。
+    #
     # 规则（docs/backend/DIAGNOSIS_DESIGN.md §6）：
-    #   1. 必须包含**有证据支持**的资源；
-    #   2. 若产出该结论的规则标记了 propagate，则额外包含证据链上的中间层
+    #   1. affected 必须包含**有证据支持**的资源；
+    #   2. 若产出该结论的规则标记了 propagate，则额外包含证据链上缺环的中间层
     #      —— 它们确实参与了这条链，而不是"结构上碰巧在下游"；
     #   3. 其余结构相关但无证据的资源进 potentially_affected，与前者分开。
+    #   4. 证据的**上游**资源（如证据为 GPU 时的宿主机）不算受影响 ——
+    #      它是提供证据的层，不是被影响的对象。
     evidence_resources = {ev.resource_id for ev in relevant}
     propagating_causes = {r.root_cause for r in ctx.rule_set.rules if r.propagate}
-    propagated: set[str] = set()
-    if top_cause in propagating_causes:
-        for resource_id in evidence_resources:
-            propagated.update(ctx.correlation_path(resource_id, evidence_resources))
-
-    affected_set = (evidence_resources | propagated) - {ctx.anchor_resource_id}
-    affected = tuple(sorted(affected_set))
-    potentially = tuple(
-        sorted(r for r in reachable if r not in affected_set and r != ctx.anchor_resource_id)
-    )
+    scope = ctx.impact_scope(evidence_resources, propagate=top_cause in propagating_causes)
 
     return Diagnosis(
         id="",
@@ -233,8 +229,8 @@ def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
         root_cause=top_cause,
         confidence=top_conf,
         confidence_breakdown=tuple(by_cause[top_cause]),
-        affected_resources=affected,
-        potentially_affected=potentially,
+        affected_resources=scope.affected,
+        potentially_affected=scope.potentially_affected,
         evidence=tuple(relevant),
         recommendation=RECOMMENDATIONS.get(top_cause, ()),
         rule_set_version=ctx.rule_set.version,

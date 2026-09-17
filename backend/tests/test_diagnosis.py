@@ -26,6 +26,7 @@ from app.diagnosis import (
 from app.diagnosis.types import Edge, Resource
 
 T0 = datetime(2026, 9, 17, 12, 0, 0, tzinfo=UTC)
+HOST = "host:zsvirt:h1"
 GPU = "gpu:zsvirt:g0"
 VGPU = "vgpu:zsvirt:v0"
 VM = "vm:zsvirt:3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44"
@@ -35,13 +36,15 @@ AIS = "ai_service:probe:probe-3f2a9c10:vllm"
 
 def build_ctx(evidence, rules, anchor=AIS, window=None):
     resources = {
-        GPU: Resource(id=GPU, kind="gpu"),
+        HOST: Resource(id=HOST, kind="host"),
+        GPU: Resource(id=GPU, kind="gpu", parent_id=HOST),
         VGPU: Resource(id=VGPU, kind="vgpu", parent_id=GPU),
         VM: Resource(id=VM, kind="vm", parent_id=VGPU),
         CTR: Resource(id=CTR, kind="container", parent_id=VM),
         AIS: Resource(id=AIS, kind="ai_service", parent_id=CTR),
     }
     edges = (
+        Edge(HOST, GPU),
         Edge(GPU, VGPU),
         Edge(VGPU, VM),
         Edge(VM, CTR),
@@ -136,14 +139,17 @@ def test_gpu_memory_exhausted_happy_path():
     assert len(result.evidence) == 2
     assert result.rule_set_version == "rs-test-0.1.0"
     assert result.recommendation, "根因非 UNKNOWN 时必须给出处置建议"
-    # 跨层传播（规则标记 propagate=True）：证据链上的中间层计入受影响范围，
-    # 从 GPU 一路到 AI 服务，体现"跨层关联"能力
+
+    # 跨层关联：证据自身（GPU / AI 服务）+ 其下游后代全部计入受影响范围，
+    # 覆盖 GPU→vGPU→VM→容器 整条链，这正是「跨层关联」能力的体现。
     assert VGPU in result.affected_resources
-    assert VM in result.affected_resources, "证据链上的中间层应计入受影响"
+    assert VM in result.affected_resources
     assert CTR in result.affected_resources
-    assert result.potentially_affected == (), (
-        "本场景证据链已覆盖全部结构相关资源，potentially_affected 应为空"
-    )
+
+    # 宿主机是锚点祖先且无证据 → 归 potentially_affected，不算"被影响"。
+    # 它提供了证据所在的层，但自身并未受影响；两者必须分开（C 要求 D-075）。
+    assert HOST not in result.affected_resources
+    assert HOST in result.potentially_affected
 
 
 def test_low_confidence_forces_unknown():

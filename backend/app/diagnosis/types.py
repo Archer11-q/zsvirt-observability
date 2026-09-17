@@ -6,10 +6,34 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
+
+from app.graph.algorithms import (
+    Edge as GraphEdge,  # 与本地 Edge（诊断消息用）区分
+)
+from app.graph.algorithms import (
+    ancestors as graph_ancestors,
+)
+from app.graph.algorithms import (
+    build_child_index,
+    build_parent_index,
+)
+from app.graph.algorithms import (
+    chain_intermediates as graph_chain_intermediates,
+)
+from app.graph.algorithms import (
+    clean_parent_chain as graph_clean_parent_chain,
+)
+from app.graph.algorithms import (
+    descendants as graph_descendants,
+)
+from app.graph.algorithms import (
+    impact_scope as graph_impact_scope,
+)
 
 
 class Severity(StrEnum):
@@ -185,84 +209,71 @@ class DiagnosisContext:
     evidence: tuple[Evidence, ...] = ()
     rule_set: RuleSet = field(default_factory=lambda: RuleSet(version="rs-empty"))
 
+    # ---- 图遍历：复用 app.graph.algorithms，避免与资源图出现双份实现 ----
+    #
+    # 诊断引擎与资源图（L3）必须共享同一套遍历语义，否则"引擎算出的影响范围"
+    # 与"拓扑接口给出的影响范围"会不一致。这里只做适配，不重复实现算法。
+
+    @property
+    def _parent_index(self) -> dict[str, str]:
+        return build_parent_index(
+            GraphEdge(parent_id=e.parent_id, child_id=e.child_id, relation=e.relation)
+            for e in self.edges
+        )
+
+    @property
+    def _child_index(self) -> dict[str, list[str]]:
+        return build_child_index(
+            GraphEdge(parent_id=e.parent_id, child_id=e.child_id, relation=e.relation)
+            for e in self.edges
+        )
+
     def children_of(self, resource_id: str) -> list[str]:
-        return [e.child_id for e in self.edges if e.parent_id == resource_id]
+        return list(self._child_index.get(resource_id, ()))
 
     def parents_of(self, resource_id: str) -> list[str]:
-        return [e.parent_id for e in self.edges if e.child_id == resource_id]
+        parent = self._parent_index.get(resource_id)
+        return [parent] if parent is not None else []
 
     def descendants(self, resource_id: str) -> list[str]:
         """沿资源图向下传播（受影响方向）。"""
-        seen: set[str] = set()
-        stack = [resource_id]
-        out: list[str] = []
-        while stack:
-            current = stack.pop()
-            for child in self.children_of(current):
-                if child not in seen:
-                    seen.add(child)
-                    out.append(child)
-                    stack.append(child)
-        return out
+        return graph_descendants(resource_id, self._child_index)
 
     def ancestors(self, resource_id: str) -> list[str]:
         """向上追溯（找根因的方向）。"""
-        seen: set[str] = set()
-        stack = [resource_id]
-        out: list[str] = []
-        while stack:
-            current = stack.pop()
-            for parent in self.parents_of(current):
-                if parent not in seen:
-                    seen.add(parent)
-                    out.append(parent)
-                    stack.append(parent)
-        return out
-
-    def path_to_anchor(self, resource_id: str) -> list[str]:
-        """返回从 resource_id（**不含**）向上到锚点（**不含**）之间的中间资源。
-
-        保留此方法用于"锚点视角"的路径查询；跨层传播请用
-        `correlation_path`（它沿证据链形状行走，不强制经过锚点）。
-        """
-        target = self.anchor_resource_id
-        if resource_id == target:
-            return []
-        parents = {e.child_id: e.parent_id for e in self.edges if e.child_id != e.parent_id}
-        out: list[str] = []
-        seen: set[str] = set()
-        current = resource_id
-        while current in parents:
-            parent = parents[current]
-            if parent in seen:
-                break
-            seen.add(parent)
-            if parent == target:
-                return out
-            out.append(parent)
-            current = parent
-        return out
+        return graph_ancestors(resource_id, self._parent_index)
 
     def correlation_path(self, resource_id: str, stop_at: set[str]) -> list[str]:
-        """沿证据链形状向上行走，返回中间资源。
+        """沿**干净父链**向上行走，返回中间资源。
 
         从 resource_id 向上回溯，**遇到 stop_at 中的资源即停**（不包括它），
-        返回途中的资源。这刻画的是"证据链形状"：
+        返回途中的资源。这刻画的是证据链：
 
             gpu(证据) → vgpu(证据) → vm(中间层) → container(中间层) → ai_service(锚点)
 
-        从 container 出发向上走，在 vgpu 处遇到已有证据即停，于是把
-        vm 纳入受影响范围 —— 它确实参与了这条证据链，而不是"结构上碰巧在下游"。
+        从 GPU 出发向上走，在 VGPU（另一条证据）处停住，于是把 VM、CTR
+        纳入受影响范围 —— 它们确实参与了这条链。**关键是不得越过停止点继续
+        走到宿主机**：宿主机与"GPU 显存耗尽"这条链无关。
         """
-        parents = {e.child_id: e.parent_id for e in self.edges if e.child_id != e.parent_id}
-        out: list[str] = []
-        seen: set[str] = set()
-        current = resource_id
-        while current in parents:
-            parent = parents[current]
-            if parent in seen or parent in stop_at or parent == self.anchor_resource_id:
-                break
-            seen.add(parent)
-            out.append(parent)
-            current = parent
-        return out
+        return graph_clean_parent_chain(
+            resource_id,
+            parent_index=self._parent_index,
+            stop_at=stop_at,
+            hard_stop=self.anchor_resource_id,
+        )
+
+    def chain_intermediates(self, evidence_resources: Iterable[str]) -> list[str]:
+        """证据链上缺环的中间层（见 `app.graph.algorithms.chain_intermediates`）。"""
+        return graph_chain_intermediates(
+            evidence_resources, self._parent_index, self.anchor_resource_id
+        )
+
+    def impact_scope(self, evidence_resources: Iterable[str], *, propagate: bool = True):
+        """影响范围。与 `app.graph.algorithms.impact_scope` 同一实现。"""
+        return graph_impact_scope(
+            self.anchor_resource_id,
+            evidence_resources,
+            self._parent_index,
+            self._child_index,
+            propagate=propagate,
+        )
