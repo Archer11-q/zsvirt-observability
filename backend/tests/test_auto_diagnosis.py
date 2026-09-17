@@ -90,7 +90,10 @@ class TestAutomaticLinkage:
 
         # 诊断本身必须可查、形态正确
         diag = client.get(f"/api/v1/diagnosis/{alert['diagnosisId']}").json()["data"]
-        assert diag["trigger"] == {"alertId": alert["id"]}
+        # 子集断言：聚合后的 trigger 还会带上 `alertIds` / `clusterSize`，
+        # 让"这条结论关联了哪些告警"事后可查。本用例只关心告警 id 在不在。
+        assert diag["trigger"]["alertId"] == alert["id"]
+        assert alert["id"] in diag["trigger"]["alertIds"]
         assert diag["ruleSetVersion"], "结论必须带规则集版本"
 
         # **具体根因**，不再是 UNKNOWN。
@@ -253,22 +256,38 @@ class TestAutoDiagnosisGuards:
 
         未诊断的告警在列表里 `diagnosisId` 为 `null`，用户点"一键诊断"即可补上 ——
         这是**可恢复的降级**，而卡住上报是不可恢复的。
+
+        五个告警必须落在**五个不同资源**上：同资源的多条告警会被事故聚合正确地
+        并成一次事故，那样就测不到上限了。上限要防的正是"一次大批量上报触达
+        大量不同资源"。
         """
-        upsert_resource(
-            db_session, resource_id=CONTAINER_ID, kind=ResourceKind.CONTAINER.value,
-            status="running", seen_at=sc.NOW,
-        )
-        ids = [seed_alert(db_session, f"alert_bulk_{i}") for i in range(5)]
+        resource_ids = []
+        for index in range(5):
+            resource_id = f"container:probe:probe-x:bulk-{index}"
+            upsert_resource(
+                db_session,
+                resource_id=resource_id,
+                kind=ResourceKind.CONTAINER.value,
+                status="running",
+                seen_at=sc.NOW,
+            )
+            resource_ids.append(resource_id)
+
+        ids = [
+            seed_alert(db_session, f"alert_bulk_{index}", resource_id=resource_id)
+            for index, resource_id in enumerate(resource_ids)
+        ]
         db_session.commit()
 
         result = run_auto_diagnosis(db_session, ids, max_diagnoses=2, now=sc.NOW)
 
-        assert len(result.attempted) == 2
+        assert len(result.attempted) == 2, "两次事故应被诊断"
         assert result.truncated is True
-        assert len(result.linked) == 2
-        # 剩下的仍可手动诊断
-        remaining = [i for i in ids if i not in result.linked]
-        assert len(remaining) == 3
+        # 每次事故的成员各自关联到同一条结论
+        assert len(set(result.linked.values())) == 2
+        assert sorted(result.linked) == ["alert_bulk_0", "alert_bulk_1"], (
+            "截断时优先保留更严重 / 更近触发的事故"
+        )
 
     def test_diagnosis_failure_does_not_break_the_alert(
         self, client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch

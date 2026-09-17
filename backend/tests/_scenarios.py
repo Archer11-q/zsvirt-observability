@@ -140,6 +140,27 @@ def _event(
     return payload
 
 
+# ---------------------------------------------------------------- 演示场景桥接
+#
+# 多场景测试要用**演示场景**（它们带按场景区分的工作负载资源），但测试文件在
+# 这里。经此桥接而不是复制资源 id：复制会在 suffix 改动时立刻漂移。
+
+DEMO_AGENT_ID = "demo-agent"
+
+
+def scenario_for_demo(name: str) -> dict:
+    """取演示场景的上报批次（`app/zsvirt/scenarios.build_batch`）。"""
+    from app.zsvirt.scenarios import build_batch
+
+    return build_batch(name)
+
+
+def demo_suffix(name: str) -> str:
+    from app.zsvirt.scenarios import scenario_suffix
+
+    return scenario_suffix(name)
+
+
 def batch(
     events: list[dict[str, Any]],
     *,
@@ -344,15 +365,18 @@ def single_event_batch(
 
 __all__ = [
     "AGENT_ID",
+    "DEMO_AGENT_ID",
     "NOW",
     "VM_ID",
     "batch",
+    "demo_suffix",
     "next_batch_id",
     "resources",
     "scenario_benign",
     "scenario_container_oom",
     "scenario_gpu_memory_exhausted",
     "scenario_network_failure",
+    "scenario_for_demo",
     "scenario_wrong_layer",
     "single_event_batch",
 ]

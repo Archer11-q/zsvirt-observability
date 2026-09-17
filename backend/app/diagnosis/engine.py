@@ -21,6 +21,7 @@ from app.diagnosis.types import (
     Diagnosis,
     DiagnosisContext,
     Evidence,
+    EvidenceKind,
     Recommendation,
     Rule,
     RuleHit,
@@ -124,6 +125,25 @@ def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
     relevant: list[Evidence] = [
         ev for ev in ctx.evidence if ev.resource_id in reachable and window.contains(ev.at)
     ]
+
+    # ---- 方向性：锚点自己有问题时，不看它**祖先**上的证据 ----
+    #
+    # 诊断锚定在一个资源上，问的是"它的根因是什么"。祖先上的证据是合法答案 ——
+    # 但一旦锚点自己就有告警，就说明**锚点这一层已经直接观测到故障**，
+    # 此时祖先上另一起故障的证据会把结论带偏（实测：容器 OOM 事故因为看到
+    # vGPU 上的 `gpu.memory.exhausted` 而被判成 GPU_MEMORY_EXHAUSTED，
+    # 容器自己的 0.9 分被祖先的 1.0 分压过去）。
+    #
+    # 向上关联并没有因此丢失：GPU 故障有自己的告警与自己的诊断，
+    # 告警的 `resourceId` 仍然指向它。
+    if any(ev.kind is EvidenceKind.ALERT and ev.resource_id == ctx.anchor_resource_id
+           for ev in relevant):
+        ancestor_ids = set(ctx.ancestors(ctx.anchor_resource_id))
+        relevant = [ev for ev in relevant if ev.resource_id not in ancestor_ids]
+        notes.append(
+            "锚点自身有告警，因此不考虑其祖先资源上的证据"
+            "（那些故障有自己的告警与诊断）"
+        )
 
     if any(ev.is_simulated for ev in relevant):
         notes.append("本次诊断包含模拟数据来源的证据，已在 evidence.source 中标注")

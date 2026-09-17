@@ -55,11 +55,20 @@ def build_context(
     anchor_resource_id: str,
     window: TimeWindow,
     rule_set: RuleSet | None = None,
+    resource_scope: set[str] | None = None,
 ) -> DiagnosisContext:
     """从数据库装配诊断上下文。
 
     资源图只取锚点周围（`max_depth` 限制），事件按时间窗过滤 ——
     两者都刻意设上限，避免"一次诊断扫全库"。
+
+    `resource_scope` 进一步把事件限制在一组资源上。由告警触发时传入
+    **该告警所在资源的可达闭包**（自身 + 祖先 + 后代）：
+
+    - 只传"告警采纳的事件 id"太窄 —— 容器 OOM 告警只引用 `container.oom_killed`，
+      那样就看不到 AI 服务上的 `inference.error`，跨层关联被关掉了；
+    - 完全不限制又太宽 —— 同一批里若有多条不同故障的告警，每条诊断都会吃到
+      全部事件，产出内容相同的多条结论，把诊断列表变成噪声。
     """
     nodes, edges = load_graph(session, root_id=anchor_resource_id, max_depth=MAX_GRAPH_DEPTH)
 
@@ -92,6 +101,11 @@ def build_context(
         occurred_to=window.end,
         resource_ids=sorted(reachable),
     )
+
+    if resource_scope is not None:
+        # 再与可达范围取交集：`resource_scope` 是调用方给的"这次只看这些资源"，
+        # 而 `reachable` 是锚点的可达闭包，两者相交才是既相关又聚焦的事件集。
+        events = [e for e in events if e.resource_id in resource_scope]
 
     evidence = tuple(
         item for e in events for item in _event_evidence(e)
@@ -234,6 +248,7 @@ def run_diagnosis(
     trigger: dict[str, Any],
     rule_set: RuleSet | None = None,
     now: datetime | None = None,
+    resource_scope: set[str] | None = None,
 ) -> tuple[DiagnosisRow, int]:
     """执行一次诊断并落库。返回 `(诊断行, 耗时毫秒)`。
 
@@ -246,6 +261,7 @@ def run_diagnosis(
         anchor_resource_id=anchor_resource_id,
         window=window,
         rule_set=rule_set,
+        resource_scope=resource_scope,
     )
 
     result: Diagnosis = diagnose(ctx, now=now)
@@ -315,6 +331,90 @@ def _assert_confidence_reproducible(result: Diagnosis) -> None:
             f"confidence 不可复算：breakdown 之和={total}，confidence={result.confidence}。"
             "这是引擎缺陷，拒绝落库。"
         )
+
+
+def _directed_walk(
+    session: Session, resource_id: str
+) -> tuple[set[str], dict[str, str]]:
+    """返回 `(自身 + 全部后代, 资源 id → 父 id)`。
+
+    **只沿有向关系走。** `load_graph` 是无向闭包：从根向上走到 VM 之后会再向下
+    走进 VM 下的**其他**分支，于是两个兄弟容器会互相出现在对方的结果里。
+    这个坑踩了两次（`resource_scope_for` 与 `descendant_scope_for` 各一次），
+    因此把遍历收在这一处，两个调用方共用 —— 分开写就一定会有一条漏改。
+    """
+    nodes, edges = load_graph(session, root_id=resource_id, max_depth=MAX_GRAPH_DEPTH)
+    parent_map = {r.id: r.parent_id for r in nodes if r.parent_id}
+
+    child_index: dict[str, list[str]] = {}
+    for edge in edges:
+        child_index.setdefault(edge.parent_id, []).append(edge.child_id)
+
+    scope = {resource_id}
+    frontier = [resource_id]
+    depth = 0
+    while frontier and depth < MAX_GRAPH_DEPTH:
+        nxt: list[str] = []
+        for node in frontier:
+            for child in child_index.get(node, ()):
+                if child in scope:
+                    continue
+                scope.add(child)
+                nxt.append(child)
+        frontier = nxt
+        depth += 1
+
+    return scope, parent_map
+
+
+def _ancestors_from(parent_map: dict[str, str], resource_id: str) -> list[str]:
+    """沿父链向上收集祖先（含环保护）。"""
+    out: list[str] = []
+    seen = {resource_id}
+    current = resource_id
+    depth = 0
+    while depth < MAX_GRAPH_DEPTH:
+        parent = parent_map.get(current)
+        if parent is None or parent in seen:
+            break
+        seen.add(parent)
+        out.append(parent)
+        current = parent
+        depth += 1
+    return out
+
+
+def resource_scope_for(session: Session, resource_id: str) -> set[str]:
+    """某资源的**有向可达闭包**：自身 + 全部祖先 + 全部后代。
+
+    用于"这次诊断只看与这条告警相关的资源"。根因常在**祖先**方向（GPU 在容器之上），
+    影响在**后代**方向（服务在容器之下），只看单点会让跨层关联失效。
+
+    **不能用 `load_graph(root_id=...)` 代替**：那是**无向**闭包 —— 它从根向上走到
+    VM 之后会再向下走进 VM 下的**其他**分支，于是两个兄弟容器会互相出现在对方的
+    范围里（实测：容器 A 的范围含容器 B，反之亦然）。后果是两起独立事故被互相
+    污染，一次诊断能引用另一起的证据。
+
+    正确做法是沿**有向**关系走：自身 + 父链（祖先）+ 子索引（后代）。
+
+    > 这个缺陷只有在存在**第二个兄弟节点**时才会显现。此前所有测试都只有一条链，
+    > 而单链上"无向连通分量"与"有向可达闭包"恰好是同一个集合。
+    """
+    scope, parent_map = _directed_walk(session, resource_id)
+    scope.update(_ancestors_from(parent_map, resource_id))
+    return scope
+
+
+def descendant_scope_for(session: Session, resource_id: str) -> set[str]:
+    """某资源**自身 + 全部后代**（不含祖先）。
+
+    与 `resource_scope_for` 的区别是方向：那个是完整闭包（含祖先），用于"哪些证据
+    可以解释它"；这个是向下闭包，用于判断"这次事故是否已经有结论"。
+
+    两者混用会造成不同故障共享同一条结论 —— 见 `diagnosis/auto._diagnosed_alerts_for`。
+    """
+    scope, _parent_map = _directed_walk(session, resource_id)
+    return scope
 
 
 def resolve_trigger(
@@ -480,18 +580,48 @@ def latest_diagnoses_per_owner(
     )
 
     wanted_owners = {owner for resource_owners in owners.values() for owner in resource_owners}
-    found: dict[str, DiagnosisRow] = {}
-    for row in session.execute(stmt).scalars():
-        row_resources: set[str] = set(row.affected_resources or ())
-        row_resources.update(row.potentially_affected or ())
-        row_resources.update(row.on_chain or ())
-        for resource_id in row_resources:
-            for owner in owners.get(resource_id, ()):
-                # `setdefault` 配合 desc 排序 = "每个工作负载只留最新的一条"
-                found.setdefault(owner, row)
-        if len(found) == len(wanted_owners):
-            break
-    return found
+
+    # 每个工作负载"自己的平面"= 它自身 + 它的**后代**（不含共享祖先）。
+    #
+    # 必须是后代而不只是自身节点：容器上的结论点名的是容器，那正是该工作负载自己的
+    # 事。而 VM / vGPU 是所有工作负载共享的基础设施，共享层上的结论不属于任何单个
+    # 工作负载 —— 把它当"点名了自己"会让每张卡片显示同一条结论（实测）。
+    #
+    # 用 `_directed_walk`（与 `resource_scope_for` 同一实现）而不是另算一套：
+    # "哪些资源属于这个工作负载"只应有一个定义点。
+    own_plane: dict[str, set[str]] = {
+        owner: _directed_walk(session, owner)[0] for owner in wanted_owners
+    }
+
+    rows = list(session.execute(stmt).scalars())
+
+    def _rank(row: DiagnosisRow, owner: str) -> int:
+        """这条结论对该工作负载的"贴近程度"，越小越贴近。"""
+        direct: set[str] = set(row.affected_resources or ())
+        direct.update(row.on_chain or ())
+        touched: set[str] = direct | set(row.potentially_affected or ())
+
+        if owner in direct:
+            return 0
+        plane = own_plane.get(owner, {owner})
+        if (touched & plane) - {owner} and (direct & plane):
+            return 1
+        return 2
+
+    # 一次性算好每个工作负载的排序键 —— 不用"迭代中逐步替换"的写法：
+    # 那种写法要求平面集合、自身节点、并列取舍三件事同时正确，任一处错就会静默
+    # 退回"所有卡片都显示最新一条"（实测错了两次）。
+    best: dict[str, tuple[int, float]] = {}
+    chosen: dict[str, DiagnosisRow] = {}
+    for row in rows:
+        created = row.created_at.timestamp()
+        for owner in wanted_owners:
+            key = (_rank(row, owner), -created)
+            if owner not in best or key < best[owner]:
+                best[owner] = key
+                chosen[owner] = row
+
+    return chosen
 
 
 def latest_diagnosis_for_resource(
@@ -539,8 +669,10 @@ __all__ = [
     "latest_diagnoses_per_owner",
     "latest_diagnosis_for_resource",
     "link_to_alert",
+    "descendant_scope_for",
     "query_diagnoses",
     "resolve_trigger",
+    "resource_scope_for",
     "root_cause_counts",
     "run_diagnosis",
 ]
