@@ -9,7 +9,7 @@
 
 ## 结论（一句话）
 
-**17 项里，探针侧 13 项：4 项已实现、9 项已给目标格式样例（其中 4 项真实采集待 X-08、1 项待实现、4 项场景依赖见下表）；其余 4 项由 B 侧平台自产。** 无一项被 A 静默放弃；所有"待"都有明确的外部依赖编号。
+**17 项里，探针侧 13 项：5 项已实现、4 项待 X-08（目标格式样例已给）、1 项可选场景、3 项归 B 的 GPU 渠道；其余 4 项由 B 侧平台自产。** 无一项被 A 静默放弃；所有"待"都有明确的外部依赖编号。
 
 ## 逐项确认表
 
@@ -20,16 +20,8 @@
 | `container.oom_killed` | critical | `collector/container.py` | 监听 Docker `events`（`oom` / `die`） | `container_oom_killed.json` |
 | `container.restart` | warning | `collector/container.py` | 监听 Docker `events`（`restart`）；`restartCount` 在资源 attributes | `container_oom_killed.json` |
 | `process.crash` | error | `collector/process.py` | `/proc` pid 集合与上轮 `_known` 比对，消失即报 | `container_oom_killed.json` |
-| `process.io_wait.high` | warning | `collector/process.py` | `/proc/<pid>/stat` state=`D`（不可中断睡眠）瞬时检测 | `gpu_memory_exhausted.json` |
-
-**实现与冻结语义的已知差距（不阻塞，列为增强项）**：
-
-- `process.io_wait.high`：F-01 的语义是"I/O 等待**持续**偏高"（应带阈值与持续时间，
-  F-01 约定"阈值与持续时间放 `metrics`"）。当前实现是 state=`D` 瞬时检测——
-  没有"持续"窗口、`metrics` 为空，且进程持续 D 态时每轮（5s）重复报。
-  增强方向：按 `/proc/<pid>/stat` 的 CPU 时间差分计算等待比例，超阈值才报并带
-  `metrics`（阈值 + 窗口）。样例 `gpu_memory_exhausted.json` 中的
-  `metrics`（`io_wait_pct`/`threshold_pct`/`window_sec`）即目标格式。
+| `process.io_wait.high` | warning | `collector/process.py` | `/proc/<pid>/stat` `delayacct_blkio_ticks` 差分占比超阈值且连续 2 轮，带 `metrics`；无 delayacct 内核退化 state=`D` | `gpu_memory_exhausted.json` |
+| `container.network.unreachable` | error | `collector/network.py` | 容器内 AI 服务端口 TCP connect，可达→不可达转换时报一次 | `agent_network_failure.json` |
 
 ### 待 X-08（AI 工作负载日志规范，目标格式样例已给）
 
@@ -42,12 +34,6 @@
 | `inference.error` | error | 解析推理服务日志中的 5xx / 错误响应 |
 | `agent.network.timeout` | error | Agent 框架日志中的外部调用超时 |
 | `agent.task.failed` | error | Agent 任务状态日志（重试耗尽） |
-
-### 待实现（不依赖 X-08，A 的下一步）
-
-| `type` | severity | 实现方案 | 备注 |
-|---|---|---|---|
-| `container.network.unreachable` | error | 探针周期性 TCP 连通性探测（容器内服务端口），失败差分产生事件 | 样例已给目标格式（`agent_network_failure.json`）；探测目标列表从 ai_service 端点派生 |
 
 ### 场景依赖（非默认交付范围）
 

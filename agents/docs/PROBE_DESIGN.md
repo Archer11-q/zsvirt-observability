@@ -40,10 +40,11 @@ agents/
 │   └── collector/
 │       ├── __init__.py      # 采集器集合 + 默认启用清单
 │       ├── base.py          # 采集器基类
-│       ├── procutil.py      # /proc 读取共享工具
-│       ├── process.py       # 进程采集（含 crash / io_wait 事件）
+│       ├── procutil.py      # /proc 读取共享工具（cgroup 解析 / stat / cmdline）
+│       ├── process.py       # 进程采集（crash + io_wait 窗口化 + parent 挂容器）
 │       ├── container.py     # 容器采集（Docker socket 清单 + 事件）
-│       ├── ai_service.py    # AI 服务识别
+│       ├── ai_service.py    # AI 服务识别（parent 挂容器）
+│       ├── network.py       # 网络可达性探测（container.network.unreachable）
 │       └── gpu.py           # GPU 采集（预留，默认不启用）
 ├── config.example.json      # 配置样例（JSON，不含任何真实凭据）
 └── README.md                # 构建 / 运行 / 配置说明
@@ -61,11 +62,11 @@ agents/
 
 | 采集器 | 数据源 | 产出 | 频率 |
 |---|---|---|---|
-| `process` | `/proc/<pid>/stat` `status` `cmdline` `io` | `process` 资源 + `process.crash` `process.io_wait.high` | 5s 轮询 |
+| `process` | `/proc/<pid>/stat` `status` `cmdline` `cgroup` | `process` 资源（parent 挂容器）+ `process.crash` `process.io_wait.high` | 5s 轮询 |
 | `container` | Docker `/var/run/docker.sock` API | `container` 资源 + `container.oom_killed` `container.restart` | 清单 10s + 事件流实时 |
-| `ai_service` | 进程 cmdline + 端口探测 | `ai_service` 资源 + `inference.*` | 10s 轮询 |
+| `ai_service` | 进程 cmdline + 端口探测 | `ai_service` 资源（parent 挂容器）+ `inference.*` | 10s 轮询 |
+| `network` | 容器内 AI 服务端口 TCP connect | `container.network.unreachable`（up→down 转换） | 15s 轮询 |
 | `gpu`（可选） | `nvidia-smi` CSV | VM 内 GPU 指标（若直通） | 10s 轮询 |
-| `event_source` | Docker events 流 / 进程退出监控 / 网络探测 | 事件类 | 实时 / 5s |
 
 > **GPU/vGPU 指标主责在 B 的 `zsvirt-adapter`**（DECISIONS D-028「三层分工 + 可插拔 Provider」）；探针仅在 VM 有 GPU 直通时补充采集，非主渠道。
 
@@ -77,11 +78,14 @@ agents/
 | 容器清单 | Docker socket `GET /containers/json` | `container.sourceId = 容器 ID 前 12 位` |
 | 容器事件 | Docker socket `GET /events`（filter `oom`/`die`/`restart`） | `container.oom_killed`（critical）、`container.restart`（warning） |
 | 进程崩溃 | 对比相邻两次进程清单，进程消失且退出码非零 / 被信号终止 | `process.crash`（error） |
-| I/O 等待 | `/proc/<pid>/io` 的 `read_bytes`/`write_bytes` 速率 + `/proc/<pid>/stat` 的 `state=D` | `process.io_wait.high`（warning） |
+| I/O 等待 | `/proc/<pid>/stat` 的 `delayacct_blkio_ticks`（字段 42）差分占比 + 连续轮数 | `process.io_wait.high`（warning，带 `io_wait_pct`/`threshold_pct`/`window_sec`）；无 delayacct 内核退化 state=`D` |
 | AI 服务识别 | 进程 cmdline 命中已知框架（vllm / triton / ollama / fastapi 等）+ 监听端口 | `ai_service.sourceId = 服务名 + 端口` |
 | 推理事件 | 解析 AI 服务的访问/错误日志（配置日志路径）或健康端点探测 | `inference.timeout` / `inference.error` |
 | Agent 事件 | 解析 Agent 框架日志 / 状态文件 | `agent.task.failed` / `agent.network.timeout` |
-| 网络探测 | 从容器/服务视角探测目标连通性（TCP connect） | `container.network.unreachable` |
+| 网络探测 | 容器内 AI 服务端口 TCP connect（可达 → 不可达转换） | `container.network.unreachable`（error，只报一次） |
+
+> **进程/服务的资源归属**：容器内进程与 AI 服务经 `/proc/<pid>/cgroup` 解析出容器 ID 前 12 位，
+> 作为 `parentSourceId` 挂到容器资源下 —— 为 B 的资源图提供 container→process / container→ai_service 边。
 
 > **进程采集范围**：优先采集**容器内进程**（通过 `/proc/<pid>/cgroup` 归属判断）+ **直接运行于 VM 上的 AI 服务进程**（cmdline 命中框架特征），而非全量进程——否则 `process.crash` 会淹没在系统进程噪音里。
 

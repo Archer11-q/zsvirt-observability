@@ -45,24 +45,25 @@ probe/
 ├── buffer.py          # SQLite 断网缓冲（FIFO）
 ├── reporter.py        # HTTP 批量上报
 └── collector/
-    ├── process.py     # 进程采集（/proc 解析）
+    ├── procutil.py    # /proc 共享读取（cgroup 解析容器 ID / stat / cmdline）
+    ├── process.py     # 进程采集（crash + io_wait 窗口化 + parent 挂容器）
     ├── container.py   # 容器采集（Docker socket）
-    ├── ai_service.py  # AI 服务识别
+    ├── ai_service.py  # AI 服务识别（parent 挂容器）
+    ├── network.py     # 网络可达性探测（container.network.unreachable）
     └── gpu.py         # GPU 采集（预留，默认不启用）
 tests/
-└── test_sensitive_vectors.py  # 脱敏一致性校验（零依赖，对齐共享向量）
+├── test_sensitive_vectors.py  # 脱敏一致性校验（零依赖，对齐共享向量）
+└── test_collectors.py         # 采集器单测（cgroup 解析 / io_wait / 网络探测）
 ```
 
-## 脱敏一致性校验
-
-探针的 `sensitive.py` 与后端 `backend/app/normalize/sensitive.py` 共同受
-`shared/sensitive_vectors.json`（31 条向量，含 10 条反例）约束，两侧必须逐条行为一致：
+## 测试
 
 ```bash
-python3.12 agents/probe/tests/test_sensitive_vectors.py
+python3.12 agents/probe/tests/test_sensitive_vectors.py   # 脱敏与 B 侧逐条一致
+python3.12 agents/probe/tests/test_collectors.py          # 采集器逻辑
 ```
 
-零第三方依赖（只用标准库 `json` + `unittest`）。
+零第三方依赖（只用标准库 `json` + `unittest` + `mock`）。
 
 ## 契约对应
 
