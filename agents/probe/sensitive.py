@@ -5,6 +5,11 @@
 - cmdline 敏感参数掩码。
 - 白名单外的 attributes 字段不采集（见 collector）。
 - `raw` 递归删除环境变量类敏感键。
+
+**与 B 侧一致**：键名与 cmdline 规则、递归过滤行为与
+`backend/app/normalize/sensitive.py` 逐条对齐，共同受
+`shared/sensitive_vectors.json`（31 条向量，含 10 条反例）约束，
+由 `agents/probe/tests/test_sensitive_vectors.py` 断言。
 """
 
 from __future__ import annotations
@@ -21,6 +26,14 @@ _CREDENTIAL_KEY = re.compile(
     r"(authorization|cookie|set-cookie|private_key|certificate)", re.IGNORECASE
 )
 
+# 裸字段名：`password` / `passwd` / `secret` / `token` 这类不带下划线前缀的形态。
+# 用全等匹配（非子串），因此 `password_hint` / `secretary` / `tokenizer` 不会被误杀。
+# （此前探针只认 `_PASSWORD` 后缀，`{"password": "x"}` 会漏过；现已补齐，两侧等价。）
+_BARE_SECRET_KEY = re.compile(
+    r"^(password|passwd|secret|token|apikey|api_key|access_key|secret_key)$",
+    re.IGNORECASE,
+)
+
 # cmdline 中的敏感参数名
 _CMD_SECRET_NAME = re.compile(
     r"(password|passwd|token|api[-_]?key|secret|authorization)", re.IGNORECASE
@@ -28,11 +41,22 @@ _CMD_SECRET_NAME = re.compile(
 
 
 def is_sensitive_key(key: str) -> bool:
-    """判断键名是否命中敏感规则。"""
+    """判断键名是否命中敏感规则。
+
+    四条规则取或：
+
+      1. 后缀 `_KEY` / `_TOKEN` / `_SECRET` / `_PASSWORD` / `_PASSWD` / `_CREDENTIAL`
+      2. 前缀 `AWS_` / `OPENAI_`
+      3. 子串 `authorization` / `cookie` / `set-cookie` / `private_key` / `certificate`
+      4. 全等 `password` / `passwd` / `secret` / `token` / `api_key` 等裸字段名
+    """
+    if not isinstance(key, str):
+        return False
     return bool(
         _SENSITIVE_KEY_SUFFIX.match(key)
         or _SENSITIVE_KEY_PREFIX.match(key)
-        or _CREDENTIAL_KEY.match(key)
+        or _CREDENTIAL_KEY.search(key)
+        or _BARE_SECRET_KEY.match(key)
     )
 
 

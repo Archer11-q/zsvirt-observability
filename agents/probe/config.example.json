@@ -1,6 +1,6 @@
 {
   "backend_url": "http://localhost:8080",
-  "vm_id": "3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44",
+  "vm_id": "vm:zsvirt:3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44",
   "batch_sec": 5.0,
   "event_flush_sec": 1.0,
   "batch_max_events": 1000,

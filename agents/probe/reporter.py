@@ -28,15 +28,21 @@ def build_batch(
     vm_id: str,
     resources: list[Resource],
     events: list[Event],
+    batch_id: str | None = None,
+    sent_at: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """组装一个上报批次，返回 (batchId, payload)。batchId 用 ULID，重试复用。"""
-    batch_id = ulid()
+    """组装一个上报批次，返回 (batchId, payload)。batchId 用 ULID，重试复用。
+
+    `batch_id` / `sent_at` 可注入固定值：供样例载荷生成（`fixtures/generate_samples.py`）
+    与测试使用 —— 契约测试需要确定性输入；缺省时自动生成（运行时行为不变）。
+    """
+    batch_id = batch_id or ulid()
     payload = {
         "agentId": agent_id,
         "vmId": vm_id,
         "agentVersion": __version__,
         "batchId": batch_id,
-        "sentAt": utc_now_ms(),
+        "sentAt": sent_at or utc_now_ms(),
         "resources": [r.to_payload() for r in resources],
         "events": [e.to_payload() for e in events],
     }
