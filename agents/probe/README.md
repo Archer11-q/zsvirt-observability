@@ -22,7 +22,7 @@ python3.12 -m probe
 | 环境变量 | 说明 | 默认 |
 |---|---|---|
 | `ZSVIRT_OBS_BACKEND_URL` | 后端地址 | `http://localhost:8080` |
-| `ZSVIRT_OBS_VM_ID` | ZSvirt VM UUID（**必填**，Push 挂 Pull 的唯一锚点） | — |
+| `ZSVIRT_OBS_VM_ID` | ZSvirt VM 全局 ID，**必填**，形态 `vm:zsvirt:<uuid>`（Push 挂 Pull 的唯一锚点） | — |
 | `ZSVIRT_OBS_PROBE_TOKEN` | 可选 Bearer token，默认关闭 | — |
 | `ZSVIRT_OBS_AGENT_ID` | 探针实例 ID | `probe-<vm-uuid 前 8 位>` |
 | `ZSVIRT_OBS_BATCH_SEC` | 批次间隔（秒） | `5` |

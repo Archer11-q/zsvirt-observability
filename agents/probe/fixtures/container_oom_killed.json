@@ -1,0 +1,138 @@
+{
+  "agentId": "probe-3f2a9c10",
+  "vmId": "vm:zsvirt:3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44",
+  "agentVersion": "0.1.0",
+  "batchId": "01M2Q62C009M3Y1V6B2H8D4S0Q",
+  "sentAt": "2026-09-17T08:00:06.000Z",
+  "resources": [
+    {
+      "kind": "container",
+      "sourceId": "b7c8d9e0f1a2",
+      "name": "web-0",
+      "parentSourceId": null,
+      "status": "running",
+      "attributes": {
+        "image": "vllm/vllm-openai:latest",
+        "runtime": "docker",
+        "restart_count": 1,
+        "oom_killed": true
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "container",
+      "sourceId": "c9d0e1f2a3b4",
+      "name": "redis-0",
+      "parentSourceId": null,
+      "status": "running",
+      "attributes": {
+        "image": "redis:7",
+        "runtime": "docker",
+        "restart_count": 0
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "process",
+      "sourceId": "1847309.2100",
+      "name": "python",
+      "parentSourceId": "b7c8d9e0f1a2",
+      "status": "stopped",
+      "attributes": {
+        "cmdline": [
+          "python",
+          "serve.py",
+          "--port",
+          "8000",
+          "--password",
+          "s3cret"
+        ]
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "process",
+      "sourceId": "1847312.2117",
+      "name": "python",
+      "parentSourceId": "b7c8d9e0f1a2",
+      "status": "running",
+      "attributes": {
+        "cmdline": [
+          "python",
+          "serve.py",
+          "--port",
+          "8000",
+          "--password",
+          "s3cret"
+        ]
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "ai_service",
+      "sourceId": "vllm.8000",
+      "name": "vllm",
+      "parentSourceId": "b7c8d9e0f1a2",
+      "status": "running",
+      "attributes": {
+        "framework": "vllm",
+        "endpoint": "http://127.0.0.1:8000"
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    }
+  ],
+  "events": [
+    {
+      "occurredAt": "2026-09-17T08:00:03.000Z",
+      "resourceRef": {
+        "kind": "container",
+        "sourceId": "b7c8d9e0f1a2"
+      },
+      "type": "container.oom_killed",
+      "severity": "critical",
+      "message": "容器 web-0 被内核 OOM Killer 终止",
+      "metrics": {
+        "memory_limit_mb": 2048,
+        "memory_usage_mb": 2043,
+        "oom_score": 987
+      },
+      "raw": {
+        "kernel_log": "Out of memory: Killed process 2100 (python)"
+      }
+    },
+    {
+      "occurredAt": "2026-09-17T08:00:03.200Z",
+      "resourceRef": {
+        "kind": "process",
+        "sourceId": "1847309.2100"
+      },
+      "type": "process.crash",
+      "severity": "error",
+      "message": "进程被信号 SIGKILL 终止（137 = 128 + 9，OOM 特征）",
+      "metrics": {
+        "exit_code": 137,
+        "signal": "SIGKILL"
+      },
+      "raw": {}
+    },
+    {
+      "occurredAt": "2026-09-17T08:00:05.000Z",
+      "resourceRef": {
+        "kind": "container",
+        "sourceId": "b7c8d9e0f1a2"
+      },
+      "type": "container.restart",
+      "severity": "warning",
+      "message": "容器 web-0 发生一次重启（docker restart 计数 0 → 1）",
+      "metrics": {
+        "restart_count": 1
+      },
+      "raw": {}
+    }
+  ]
+}

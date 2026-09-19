@@ -31,6 +31,9 @@ class Resource:
     parent_source_id: str | None = None  # 上级资源的 sourceId
     status: str = "running"  # running / stopped / error / unknown
     attributes: dict[str, Any] = field(default_factory=dict)
+    # 资源生命周期时间（契约 §3.2）。采集器暂未填充时保持 None（B 侧可空）。
+    first_seen_at: str | None = None
+    last_seen_at: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -40,6 +43,8 @@ class Resource:
             "parentSourceId": self.parent_source_id,
             "status": self.status,
             "attributes": self.attributes,
+            "firstSeenAt": self.first_seen_at,
+            "lastSeenAt": self.last_seen_at,
         }
 
 
