@@ -13,7 +13,7 @@ import socket
 import time
 from typing import Any
 
-from ..model import Event, Resource
+from ..model import Event, Resource, utc_now_ms
 from .base import Collector
 
 log = logging.getLogger("probe.collector.container")
@@ -71,10 +71,13 @@ class ContainerCollector(Collector):
     def __init__(self) -> None:
         self._client = DockerClient()
         self._last_event_time = int(time.time())
+        # sourceId -> 首次观察时间（firstSeenAt）
+        self._first_seen: dict[str, str] = {}
 
     def collect(self) -> tuple[list[Resource], list[Event]]:
         resources: list[Resource] = []
         events: list[Event] = []
+        now = utc_now_ms()
 
         containers = self._client.list_containers()
         for c in containers:
@@ -85,6 +88,7 @@ class ContainerCollector(Collector):
             status = "running" if state == "running" else (
                 "error" if state in ("dead", "restarting") else "stopped"
             )
+            first_seen = self._first_seen.setdefault(source_id, now)
             resources.append(
                 Resource(
                     kind="container",
@@ -96,6 +100,8 @@ class ContainerCollector(Collector):
                         "runtime": "docker",
                         "restartCount": c.get("RestartCount", 0),
                     },
+                    first_seen_at=first_seen,
+                    last_seen_at=now,
                 )
             )
 

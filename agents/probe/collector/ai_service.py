@@ -8,7 +8,7 @@ FREEZE_ACK 专业意见 1），待日志规范明确后实现。
 from __future__ import annotations
 
 from ..idgen import ai_service_source_id
-from ..model import Event, Resource
+from ..model import Event, Resource, utc_now_ms
 from .base import Collector
 from .procutil import (
     container_source_id,
@@ -23,9 +23,14 @@ class AIServiceCollector(Collector):
     name = "ai_service"
     interval = 10.0
 
+    def __init__(self) -> None:
+        # sourceId -> 首次观察时间（firstSeenAt）
+        self._first_seen: dict[str, str] = {}
+
     def collect(self) -> tuple[list[Resource], list[Event]]:
         resources: list[Resource] = []
         events: list[Event] = []
+        now = utc_now_ms()
 
         for pid in list_pids():
             cmdline = read_cmdline(pid)
@@ -39,6 +44,7 @@ class AIServiceCollector(Collector):
             source_id = ai_service_source_id(framework, port)
             # 服务所属容器（若有）：ai_service 挂到容器资源下（container→ai_service 边）
             parent_id = container_source_id(pid)
+            first_seen = self._first_seen.setdefault(source_id, now)
             resources.append(
                 Resource(
                     kind="ai_service",
@@ -50,6 +56,8 @@ class AIServiceCollector(Collector):
                         "endpoint": f"http://127.0.0.1:{port}",
                         "pid": pid,
                     },
+                    first_seen_at=first_seen,
+                    last_seen_at=now,
                 )
             )
 

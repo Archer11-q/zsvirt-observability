@@ -75,6 +75,16 @@ class TestProcessCollector(unittest.TestCase):
         c = ProcessCollector()
         resources, _ = self._env(c, _stat(100, 100, 0))
         self.assertEqual(resources[0].parent_source_id, "abcdef123456")
+        # firstSeenAt / lastSeenAt 已填充
+        self.assertIsNotNone(resources[0].first_seen_at)
+        self.assertIsNotNone(resources[0].last_seen_at)
+
+    def test_first_seen_at_stable_across_rounds(self):
+        c = ProcessCollector()
+        resources1, _ = self._env(c, _stat(100, 100, 0))
+        resources2, _ = self._env(c, _stat(150, 150, 0))
+        # firstSeenAt 沿用首次观察时间（sourceId 不变则不变），lastSeenAt 每次刷新
+        self.assertEqual(resources2[0].first_seen_at, resources1[0].first_seen_at)
 
     def test_io_wait_requires_consecutive_rounds(self):
         c = ProcessCollector()

@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..idgen import process_source_id
-from ..model import Event, Resource
+from ..model import Event, Resource, utc_now_ms
 from ..sensitive import mask_cmdline
 from .base import Collector
 from .procutil import (
@@ -45,11 +45,14 @@ class ProcessCollector(Collector):
         self._iowait: dict[int, tuple[int, int, int, int]] = {}
         # pid -> bool：state=D 兜底路径下的上一轮是否已报，避免重复刷屏
         self._d_state_reported: dict[int, bool] = {}
+        # sourceId -> 首次观察时间（firstSeenAt）
+        self._first_seen: dict[str, str] = {}
 
     def collect(self) -> tuple[list[Resource], list[Event]]:
         resources: list[Resource] = []
         events: list[Event] = []
         seen: set[int] = set()
+        now = utc_now_ms()
 
         for pid in list_pids():
             seen.add(pid)
@@ -74,6 +77,7 @@ class ProcessCollector(Collector):
             }
             # 容器内进程挂到所属容器资源下（container→process 边）
             parent_id = container_source_id(pid) if in_ctr else None
+            first_seen = self._first_seen.setdefault(source_id, now)
             resources.append(
                 Resource(
                     kind="process",
@@ -82,6 +86,8 @@ class ProcessCollector(Collector):
                     parent_source_id=parent_id,
                     status="running",
                     attributes=attrs,
+                    first_seen_at=first_seen,
+                    last_seen_at=now,
                 )
             )
             self._known[pid] = (name, source_id, in_ctr)

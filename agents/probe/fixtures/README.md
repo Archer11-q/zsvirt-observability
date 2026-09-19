@@ -44,15 +44,18 @@ python agents/probe/fixtures/generate_samples.py
 
 ## 样例与探针当前实现的差距（诚实声明）
 
-样例展示的是**契约的目标形态**；以下字段探针采集器尚未填充，但均为 B 侧可空字段，
-不影响契约测试（B 的 `ResourcePayload` 均允许 None）：
+样例展示的是**契约的目标形态**。截至最近一次提交：
 
-1. `firstSeenAt` / `lastSeenAt`：`model.Resource` 已支持，采集器填充待增强。
-2. `parentSourceId`：样例展示目标层级（container → process / ai_service，
-   agent → task）；采集器填充需 pid→容器 cgroup 映射，列为下一步增强。
-3. **场景三的 5 个事件**是 X-08（AI 工作负载日志规范）的**目标格式**：
-   字段与 severity 遵循 F-01，真实采集待日志规范落地（见
-   `agents/docs/EVENT_COVERAGE.md`）。
-4. **场景一**探针只含 VM 内症状（`process.io_wait.high`）；根因事件
-   `gpu.memory.exhausted` 由 B 的 zsvirt-adapter 产生（D-028 GPU 三层分工）。
-   B 可把本样例与 GPU 渠道数据做跨层关联测试。
+- ✅ `firstSeenAt` / `lastSeenAt`：`process` / `container` / `ai_service` 采集器已填充
+  （`firstSeenAt` = 探针首次观察时间，`lastSeenAt` = 本次采集时间）。
+- ✅ `parentSourceId`：容器内进程与 AI 服务经 cgroup 解析挂到容器资源下
+  （container → process / container → ai_service 边已真实上报）。
+- ⬜ **`agent` / `task` 资源及两者的层级**：样例中 `agent`/`task`（ULID sourceId）与
+  `agent → task` 的 parent 边仍为**目标形态** —— 真实采集依赖 X-08（AI 工作负载
+  日志规范），Agent 框架的识别与任务状态解析尚未落地。
+- ⬜ **场景三的 5 个事件**（`inference.*` / `agent.*` / `container.network.unreachable`
+  中除 `container.network.unreachable` 已实现外）是 X-08 的**目标格式**：字段与
+  severity 遵循 F-01，真实采集待日志规范落地（见 `agents/docs/EVENT_COVERAGE.md`）。
+- ⬜ **场景一**探针只含 VM 内症状（`process.io_wait.high`）；根因事件
+  `gpu.memory.exhausted` 由 B 的 zsvirt-adapter 产生（D-028 GPU 三层分工）。
+  B 可把本样例与 GPU 渠道数据做跨层关联测试。
