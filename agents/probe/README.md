@@ -22,7 +22,7 @@ python3.12 -m probe
 | 环境变量 | 说明 | 默认 |
 |---|---|---|
 | `ZSVIRT_OBS_BACKEND_URL` | 后端地址 | `http://localhost:8080` |
-| `ZSVIRT_OBS_VM_ID` | ZSvirt VM UUID（**必填**，Push 挂 Pull 的唯一锚点） | — |
+| `ZSVIRT_OBS_VM_ID` | ZSvirt VM 全局 ID，**必填**，形态 `vm:zsvirt:<uuid>`（Push 挂 Pull 的唯一锚点） | — |
 | `ZSVIRT_OBS_PROBE_TOKEN` | 可选 Bearer token，默认关闭 | — |
 | `ZSVIRT_OBS_AGENT_ID` | 探针实例 ID | `probe-<vm-uuid 前 8 位>` |
 | `ZSVIRT_OBS_BATCH_SEC` | 批次间隔（秒） | `5` |
@@ -45,11 +45,25 @@ probe/
 ├── buffer.py          # SQLite 断网缓冲（FIFO）
 ├── reporter.py        # HTTP 批量上报
 └── collector/
-    ├── process.py     # 进程采集（/proc 解析）
+    ├── procutil.py    # /proc 共享读取（cgroup 解析容器 ID / stat / cmdline）
+    ├── process.py     # 进程采集（crash + io_wait 窗口化 + parent 挂容器）
     ├── container.py   # 容器采集（Docker socket）
-    ├── ai_service.py  # AI 服务识别
+    ├── ai_service.py  # AI 服务识别（parent 挂容器）
+    ├── network.py     # 网络可达性探测（container.network.unreachable）
     └── gpu.py         # GPU 采集（预留，默认不启用）
+tests/
+├── test_sensitive_vectors.py  # 脱敏一致性校验（零依赖，对齐共享向量）
+└── test_collectors.py         # 采集器单测（cgroup 解析 / io_wait / 网络探测）
 ```
+
+## 测试
+
+```bash
+python3.12 agents/probe/tests/test_sensitive_vectors.py   # 脱敏与 B 侧逐条一致
+python3.12 agents/probe/tests/test_collectors.py          # 采集器逻辑
+```
+
+零第三方依赖（只用标准库 `json` + `unittest` + `mock`）。
 
 ## 契约对应
 

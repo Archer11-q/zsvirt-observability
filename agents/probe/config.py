@@ -87,8 +87,18 @@ def validate(cfg: Config) -> None:
     """启动自检。vmId 与 backend_url 缺失时直接报错退出，避免静默采集。"""
     if not cfg.vm_id:
         raise SystemExit(
-            "缺少 vmId：请设置环境变量 ZSVIRT_OBS_VM_ID（ZSvirt VM UUID）。"
+            "缺少 vmId：请设置环境变量 ZSVIRT_OBS_VM_ID。"
             "它是 Push 数据挂到 Pull 资源的唯一锚点。"
+        )
+    # B 侧 `IngestBatch` 要求 vmId 是 `vm:zsvirt:<uuid>` 全局 ID 形态
+    # （backend/app/ingest/schemas.py `_vm_id_shape`）；裸 UUID 会被整批 422 拒收。
+    # 探针在此提前失败（fail-fast），错误信息直接给出期望格式。
+    if not cfg.vm_id.startswith("vm:zsvirt:") or len(cfg.vm_id.split(":")) < 3:
+        raise SystemExit(
+            f"vmId 格式错误：{cfg.vm_id!r}。"
+            "必须是 'vm:zsvirt:<uuid>' 形态（ZSvirt 全局资源 ID），"
+            "例如 'vm:zsvirt:3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44'。"
+            "裸 UUID 会被后端整批拒收（HTTP 422）。"
         )
     if not cfg.backend_url:
         raise SystemExit("缺少 ZSVIRT_OBS_BACKEND_URL（后端地址）。")

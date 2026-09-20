@@ -1,0 +1,121 @@
+{
+  "agentId": "probe-3f2a9c10",
+  "vmId": "vm:zsvirt:3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44",
+  "agentVersion": "0.1.0",
+  "batchId": "01M2Q62C007K2X8R4T6W0N5P3C",
+  "sentAt": "2026-09-17T08:00:00.000Z",
+  "resources": [
+    {
+      "kind": "container",
+      "sourceId": "8f1a2b3c4d5e",
+      "name": "vllm-0",
+      "parentSourceId": null,
+      "status": "running",
+      "attributes": {
+        "image": "vllm/vllm-openai:latest",
+        "runtime": "docker"
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "container",
+      "sourceId": "a1b2c3d4e5f6",
+      "name": "qwen-agent-0",
+      "parentSourceId": null,
+      "status": "running",
+      "attributes": {
+        "image": "qwen-agent:2.1",
+        "runtime": "docker"
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "process",
+      "sourceId": "1847263.1827",
+      "name": "vllm",
+      "parentSourceId": "8f1a2b3c4d5e",
+      "status": "running",
+      "attributes": {
+        "cmdline": [
+          "python",
+          "-m",
+          "vllm.entrypoints.openai.api_server",
+          "--model",
+          "qwen2.5-7b",
+          "--port",
+          "8000",
+          "--api-key",
+          "sk-demo"
+        ]
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "process",
+      "sourceId": "1847299.1904",
+      "name": "python",
+      "parentSourceId": "a1b2c3d4e5f6",
+      "status": "running",
+      "attributes": {
+        "cmdline": [
+          "python",
+          "agent_server.py",
+          "--port",
+          "8080"
+        ]
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "process",
+      "sourceId": "1847301.1950",
+      "name": "vllm-worker",
+      "parentSourceId": "8f1a2b3c4d5e",
+      "status": "running",
+      "attributes": {
+        "cmdline": [
+          "python",
+          "-m",
+          "vllm.worker",
+          "--port",
+          "8000"
+        ]
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "ai_service",
+      "sourceId": "vllm.8000",
+      "name": "vllm",
+      "parentSourceId": "8f1a2b3c4d5e",
+      "status": "running",
+      "attributes": {
+        "framework": "vllm",
+        "endpoint": "http://127.0.0.1:8000",
+        "pid": 1827
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "ai_service",
+      "sourceId": "qwen-agent.8080",
+      "name": "qwen-agent",
+      "parentSourceId": "a1b2c3d4e5f6",
+      "status": "running",
+      "attributes": {
+        "framework": "qwen-agent",
+        "endpoint": "http://127.0.0.1:8080",
+        "pid": 1904
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    }
+  ],
+  "events": []
+}

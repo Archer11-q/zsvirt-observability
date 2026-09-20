@@ -1,0 +1,108 @@
+{
+  "agentId": "probe-3f2a9c10",
+  "vmId": "vm:zsvirt:3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44",
+  "agentVersion": "0.1.0",
+  "batchId": "01M2Q62C005Q2N8W4K7T1X6R3M",
+  "sentAt": "2026-09-17T08:00:09.000Z",
+  "resources": [
+    {
+      "kind": "container",
+      "sourceId": "8f1a2b3c4d5e",
+      "name": "vllm-0",
+      "parentSourceId": null,
+      "status": "running",
+      "attributes": {
+        "image": "vllm/vllm-openai:latest",
+        "runtime": "docker"
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "process",
+      "sourceId": "1847263.1827",
+      "name": "vllm",
+      "parentSourceId": "8f1a2b3c4d5e",
+      "status": "running",
+      "attributes": {
+        "cmdline": [
+          "python",
+          "-m",
+          "vllm.entrypoints.openai.api_server",
+          "--model",
+          "qwen2.5-7b",
+          "--port",
+          "8000"
+        ]
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "process",
+      "sourceId": "1847301.1950",
+      "name": "vllm-worker",
+      "parentSourceId": "8f1a2b3c4d5e",
+      "status": "running",
+      "attributes": {
+        "cmdline": [
+          "python",
+          "-m",
+          "vllm.worker",
+          "--port",
+          "8000"
+        ]
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "kind": "ai_service",
+      "sourceId": "vllm.8000",
+      "name": "vllm",
+      "parentSourceId": "8f1a2b3c4d5e",
+      "status": "running",
+      "attributes": {
+        "framework": "vllm",
+        "endpoint": "http://127.0.0.1:8000",
+        "pid": 1827
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    }
+  ],
+  "events": [
+    {
+      "occurredAt": "2026-09-17T08:00:02.000Z",
+      "resourceRef": {
+        "kind": "process",
+        "sourceId": "1847301.1950"
+      },
+      "type": "process.io_wait.high",
+      "severity": "warning",
+      "message": "vllm-worker I/O 等待持续偏高（可能为显存-内存换页放大）",
+      "metrics": {
+        "io_wait_pct": 47.3,
+        "threshold_pct": 30,
+        "window_sec": 60
+      },
+      "raw": {}
+    },
+    {
+      "occurredAt": "2026-09-17T08:00:08.000Z",
+      "resourceRef": {
+        "kind": "process",
+        "sourceId": "1847263.1827"
+      },
+      "type": "process.io_wait.high",
+      "severity": "warning",
+      "message": "vllm 主进程 I/O 等待升高",
+      "metrics": {
+        "io_wait_pct": 35.1,
+        "threshold_pct": 30,
+        "window_sec": 60
+      },
+      "raw": {}
+    }
+  ]
+}
