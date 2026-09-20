@@ -31,6 +31,8 @@
 
 from __future__ import annotations
 
+import json
+import pathlib
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -220,6 +222,93 @@ def _gpu_attributes(profile: FaultProfile) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------- 跨层场景
+
+#: 成员 A 的探针样例载荷目录（只读）
+#: 仓库根在 `app/zsvirt/scenarios.py` 之上三层（app/zsvirt → app → backend → 根）。
+AGENT_FIXTURES = pathlib.Path(__file__).resolve().parents[3] / "agents/probe/fixtures"
+
+#: 跨层场景用的固定基准。与 A 的样例一致（其 README 声明时间戳固定在
+#: 2026-09-17T08:00 附近），这样探针症状与 GPU 根因天然落在同一时间窗内。
+CROSS_LAYER_BASE = datetime(2026, 9, 17, 8, 0, 0, tzinfo=UTC)
+
+
+def build_cross_layer_batches() -> list[dict[str, Any]]:
+    """跨层场景：三份批次，按顺序灌入即可得到一条跨层结论。
+
+    | 顺序 | 批次 | 来源 | 内容 |
+    |---|---|---|---|
+    | 1 | 平台层 | ZSvirt 资产（此处代为构造） | `host → gpu → vgpu → vm` |
+    | 2 | 探针症状 | **成员 A 的真实样例** | `process.io_wait.high` ×2 |
+    | 3 | GPU 根因 | B 的 GPU 渠道（D-028） | `gpu.memory.exhausted` |
+
+    为什么必须三份：探针在 VM 内**看不到**平台侧显存，而 GPU 渠道看不到 VM 内的
+    进程症状。跨层结论只能由两者叠在同一条链上得出 —— 这正是本项目要证明的能力，
+    也是单来源采集做不到的地方（`DIAGNOSIS_DESIGN.md` §5 场景一）。
+
+    ⚠️ **平台层刻意放在探针命名空间里**（`agentId` 与样例相同）：这样 `sourceId`
+    能互相解析、图是连通的。真实部署里平台层来自 ZSvirt 资产 API，而两个命名空间
+    之间的 ID 桥接**尚未实现**（`zsvirt_resource_id` 目前无任何调用方，见
+    `docs/DEVELOPMENT_PLAN.md` 的外部阻塞）。这里如实标注，而不假装它已经通了。
+    """
+    fixture = AGENT_FIXTURES / "gpu_memory_exhausted.json"
+    if not fixture.exists():
+        raise FileNotFoundError(
+            f"缺少成员 A 的样例载荷 {fixture}；跨层场景依赖它（不要用自造数据替代 —— "
+            "那样演示的就不是'对方的真实载荷'了）"
+        )
+    symptom = json.loads(fixture.read_text(encoding="utf-8"))
+    agent_id = symptom["agentId"]
+    vm_id = symptom["vmId"]
+
+    platform = {
+        "agentId": agent_id,
+        "vmId": vm_id,
+        "agentVersion": "demo-1.0.0",
+        "batchId": "demo-cross-platform",
+        "sentAt": CROSS_LAYER_BASE.isoformat(),
+        "resources": [
+            {"kind": ResourceKind.HOST.value, "sourceId": "h0", "name": "demo-node-01",
+             "status": "running"},
+            {"kind": ResourceKind.GPU.value, "sourceId": "g0", "name": "A10-0",
+             "parentSourceId": "h0", "status": "running",
+             "attributes": {"memTotalBytes": 24 * 1024**3, "serialNumber": "SIM-A10-0001"}},
+            {"kind": ResourceKind.VGPU.value, "sourceId": "v0", "name": "A10-0-1g",
+             "parentSourceId": "g0", "status": "running",
+             "attributes": {"memQuotaBytes": 6 * 1024**3}},
+            {"kind": ResourceKind.VM.value, "sourceId": "self", "name": "demo-vm",
+             "parentSourceId": "v0", "status": "running"},
+        ],
+        "events": [],
+    }
+
+    gpu_root = {
+        "agentId": agent_id,
+        "vmId": vm_id,
+        "agentVersion": "demo-1.0.0",
+        "batchId": "demo-cross-gpu-root",
+        "sentAt": (CROSS_LAYER_BASE + timedelta(seconds=12)).isoformat(),
+        "resources": [],
+        "events": [
+            {
+                "occurredAt": (CROSS_LAYER_BASE + timedelta(seconds=12)).isoformat(),
+                "resourceRef": {"kind": ResourceKind.VGPU.value, "sourceId": "v0"},
+                "type": EventType.GPU_MEMORY_EXHAUSTED.value,
+                "severity": "critical",
+                "message": "vGPU 显存使用率 98%（模拟 GPU 渠道）",
+                "metrics": {
+                    "value": 98,
+                    "self_vgpu_memory_usage": 98,
+                    "host_gpu_memory_usage": 98,
+                },
+                "raw": {},
+            }
+        ],
+    }
+
+    return [platform, symptom, gpu_root]
+
+
 def _batch(
     name: str,
     *,
@@ -385,11 +474,14 @@ def build_batch(
 
 
 __all__ = [
+    "AGENT_FIXTURES",
+    "CROSS_LAYER_BASE",
     "DEMO_AGENT_ID",
     "DEMO_VM_ID",
     "DEFAULT_SUFFIX_BY_SCENARIO",
     "SCENARIO_NAMES",
     "build_batch",
+    "build_cross_layer_batches",
     "describe_scenarios",
     "scenario_suffix",
 ]

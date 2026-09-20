@@ -65,6 +65,13 @@ def upsert_resource(
     """
     now = seen_at or datetime.now(UTC)
 
+    # 父资源不存在时**不写** `parent_id`：外键约束会拒绝整条 INSERT，
+    # 而"父还没上报"是探针分批上报下的正常情形，不该让整批失败。
+    # 与 `_sync_edge_for_parent` 的取舍保持一致 —— `parent_id` 与边表是同一关系
+    # 的两个视图，不能一个允许悬空、另一个不允许。
+    if parent_id is not None and session.get(Resource, parent_id) is None:
+        parent_id = None
+
     values: dict[str, Any] = {
         "id": resource_id,
         "kind": kind,

@@ -192,6 +192,16 @@ def build_default_rule_set() -> RuleSet:
             root_cause_hint="CONTAINER_RESTART_LOOP",
         ),
         AlertRule(
+            id="R-PROC-IOWAIT-013",
+            title="进程 I/O 等待过高",
+            severity=Severity.WARNING.value,
+            condition=AlertCondition(
+                event_type="process.io_wait.high",
+                resource_kinds=(ResourceKind.PROCESS.value,),
+            ),
+            root_cause_hint="VM_DISK_IO_SATURATED",
+        ),
+        AlertRule(
             id="R-PROC-CRASH-012",
             title="进程崩溃",
             severity=Severity.ERROR.value,

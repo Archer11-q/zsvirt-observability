@@ -155,6 +155,44 @@ def seed(
 # ---------------------------------------------------------------- 展示
 
 
+def seed_cross_layer(session: Session, *, now: datetime | None = None) -> list[dict]:
+    """灌入跨层场景：平台层 → 成员 A 的探针症状 → B 的 GPU 根因。
+
+    三个批次缺一不可 —— 探针在 VM 内看不到平台侧显存，GPU 渠道看不到 VM 内进程，
+    跨层结论只能由两者叠在同一条链上得出。
+    """
+    from app.diagnosis.auto import run_auto_diagnosis
+    from app.ingest.schemas import IngestBatch
+    from app.ingest.service import ingest_batch
+    from app.zsvirt.scenarios import build_cross_layer_batches
+
+    moment = now or DEMO_NOW
+    summaries: list[dict] = []
+
+    for index, payload in enumerate(build_cross_layer_batches()):
+        result, duplicate = ingest_batch(
+            session,
+            batch=IngestBatch.model_validate(payload),
+            received_at=moment + timedelta(seconds=index),
+        )
+        session.commit()
+
+        auto = run_auto_diagnosis(session, list(result.touchedAlertIds), now=moment)
+        session.commit()
+
+        summaries.append(
+            {
+                "batchId": result.batchId,
+                "duplicate": duplicate,
+                "resources": result.accepted.resources,
+                "events": result.accepted.events,
+                "alerts": result.alerts,
+                "autoDiagnosis": auto.as_dict(),
+            }
+        )
+    return summaries
+
+
 def collect(session: Session) -> dict[str, Any]:
     """把当前状态整理成一份报告用的结构。"""
     from app.alerts.repository import query_alerts
@@ -367,6 +405,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--json", action="store_true", help="show 输出 JSON 而不是文本报告")
     parser.add_argument(
+        "--cross-layer",
+        action="store_true",
+        help="灌入跨层场景（平台层 + 成员 A 的探针症状 + B 的 GPU 根因）",
+    )
+    parser.add_argument(
         "--diagnose-warnings",
         action="store_true",
         help="对自动诊断按门限跳过的告警补跑一次手动诊断（演示两条路径）",
@@ -386,7 +429,22 @@ def main(argv: list[str] | None = None) -> int:
             print("（表结构保留）")
             return 0
 
-        if args.command in ("seed", "demo"):
+        if args.command in ("seed", "demo") and args.cross_layer:
+            if args.command == "demo":
+                reset(session)
+            print("跨层场景：平台层（ZSvirt 资产） → 成员 A 的探针样例 → B 的 GPU 渠道")
+            print("  探针在 VM 内看不到平台侧显存；GPU 渠道看不到 VM 内进程。")
+            print("  跨层结论只能由两者叠在同一条链上得出 —— 这是单来源采集做不到的。")
+            print()
+            for summary in seed_cross_layer(session):
+                auto = summary["autoDiagnosis"]
+                print(
+                    f"  [{summary['batchId']}] "
+                    f"资源 {summary['resources']}  事件 {summary['events']}  "
+                    f"新建告警 {summary['alerts'].get('created', 0)}  "
+                    f"自动诊断 {len(auto.get('linked', {}))} 条"
+                )
+        elif args.command in ("seed", "demo"):
             names = args.scenario or list(SCENARIO_NAMES)
             if args.command == "demo":
                 reset(session)

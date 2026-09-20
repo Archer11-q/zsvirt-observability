@@ -194,14 +194,30 @@ def build_default_rule_set() -> RuleSet:
             observed_template="process.io_wait.high",
             propagate=True,
         ),
+        # 注意：这里**不能**匹配 `vm.memory.exhausted` —— F-01 的 17 项里没有
+        # 这个类型，那样的规则永远不会命中（曾经真的存在这样一条死规则）。
+        # VM 内存压力的可得证据是容器/进程层的 OOM 与崩溃信号：
+        # 容器被 OOM 杀掉且**宿主机/VM 层没有独立证据**时，根因应上移到 VM。
         Rule(
             id="R-VM-MEM-040",
             root_cause="VM_MEMORY_EXHAUSTED",
-            contribution=0.55,
+            contribution=0.45,
             evidence_kind=EvidenceKind.EVENT,
-            match_name="vm.memory.exhausted",
-            resource_kinds=("vm",),
-            observed_template="vm.memory.exhausted",
+            match_name="process.crash",
+            resource_kinds=("process", "container"),
+            min_count=2,
+            observed_template="process.crash x{value}（VM 层内存压力）",
+            propagate=True,
+        ),
+        Rule(
+            id="R-VM-MEM-041",
+            root_cause="VM_MEMORY_EXHAUSTED",
+            contribution=0.30,
+            evidence_kind=EvidenceKind.EVENT,
+            match_name="process.io_wait.high",
+            resource_kinds=("process",),
+            min_count=2,
+            observed_template="process.io_wait.high x{value}（I/O 与内存压力相关）",
             propagate=True,
         ),
         # ================================================================
@@ -260,16 +276,20 @@ def build_default_rule_set() -> RuleSet:
             observed_template="process.crash",
             propagate=True,
         ),
-        # 反证：VM 内存也耗尽了 → 根因应上移到 VM，而不是停在容器层
+        # 反证：VM 层出现**多次**进程崩溃，说明压力在 VM 而不是单个容器限额
+        # 上移到 VM，因此反对"容器内存限额"这个结论。
+        #
+        # 同样不能引用 F-01 里不存在的 `vm.memory.exhausted`。
         Rule(
             id="R-CONTRA-CTR-910",
             root_cause="CONTAINER_MEMORY_LIMIT",
             contradicts="CONTAINER_MEMORY_LIMIT",
             contribution=-0.45,
             evidence_kind=EvidenceKind.EVENT,
-            match_name="vm.memory.exhausted",
-            resource_kinds=("vm",),
-            observed_template="vm.memory.exhausted（根因应上移到 VM 层）",
+            match_name="process.crash",
+            resource_kinds=("process", "container"),
+            min_count=3,
+            observed_template="process.crash x{value}（多次崩溃指向 VM 层根因）",
         ),
         # ================================================================
         # 场景三：应用 / Agent 异常

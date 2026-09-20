@@ -7,6 +7,7 @@
 | [`start.sh`](start.sh) | **一键启动**：检查环境 → 迁移数据库 → （可选）灌入演示场景 → 启动 API |
 | [`inject_fault.sh`](inject_fault.sh) | **故障注入**：通过真实 HTTP 接口把赛题场景注入到运行中的服务 |
 | [`../docs/DEMO_SCRIPT.md`](../docs/DEMO_SCRIPT.md) | **演示脚本**：3–5 分钟的讲解顺序、要点与常见提问 |
+| [`reconcile_frontend.py`](reconcile_frontend.py) | **前后端对账**：对运行中的服务实测响应，与前端声明的类型逐字段比对 |
 | [`../docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) | 环境搭建、配置项、部署步骤 |
 
 ---

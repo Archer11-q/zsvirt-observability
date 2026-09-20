@@ -165,6 +165,15 @@ def ingest_batch(
     resource_results: list[ResourceResult] = []
     known_ids: dict[tuple[str, str], str] = {}
 
+    # 本批**自己声明**的 `sourceId → kind` 映射。用它查父类型，而不是按子类型猜：
+    # `parentSourceId` 指向的资源在同一批里，类型是已知信息。
+    #
+    # 为什么必须这样（成员 A 的样例暴露的缺陷）：`process` 的父可能是 `container`，
+    # 也可能直接是 `vm`（无 Docker / 无法归到 cgroup 的进程）。按子类型猜成 `vm`
+    # 会拼出一个不存在的父 id，而 `upsert_resource` 会在同一条 INSERT 里写
+    # `parent_id` —— 外键违约直接让**整批** 503。
+    declared_kinds: dict[str, str] = {item.sourceId: item.kind for item in batch.resources}
+
     # ---- 先把 vmId 对应的 VM 登记进 known，事件与资源都能挂上 ----
     vm_id = batch.vmId
     known_ids[("vm", "self")] = vm_id
@@ -187,15 +196,24 @@ def ingest_batch(
         # 父资源可能未上报 → 先解析（可能得到占位）
         parent_global: str | None = None
         if item.parentSourceId is not None:
-            # 父资源的 kind 未给出，按层级推断（探针只需给 sourceId）
-            parent_kind = _infer_parent_kind(item.kind)
-            parent_global, _ = _resolve_resource_id(
+            # 先在**本批声明**里查父类型；查不到再退回按层级推断。
+            # 推断只是兜底 —— 它对 `process` 这类"父可能是容器也可能是 VM"的层级
+            # 必然有一半是错的，而错的代价是整批外键违约。
+            parent_kind = declared_kinds.get(item.parentSourceId) or _infer_parent_kind(
+                item.kind
+            )
+            parent_global, parent_is_placeholder = _resolve_resource_id(
                 session,
                 kind=parent_kind,
                 source_id=item.parentSourceId,
                 agent_id=batch.agentId,
                 known=known_ids,
             )
+            if parent_is_placeholder and session.get(Resource, parent_global) is None:
+                # 父资源本批未声明且库里也没有 → 不写 `parent_id`。
+                # 写一个不存在的父 id 会外键违约并把整批打回；
+                # 留空则只是这一条关系暂缺，后续批次补上（探针会重报父资源）。
+                parent_global = None
 
         # 脱敏：attributes 里的 cmdline 单独掩码（保留诊断价值）
         attrs = _redact_attributes(item.attributes)
