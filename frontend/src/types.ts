@@ -3,6 +3,7 @@
 
 export type Severity = 'info' | 'warning' | 'error' | 'critical'
 export type AlertState = 'firing' | 'acked' | 'resolved' | 'silenced'
+export type ResourceStatus = 'running' | 'stopped' | 'error' | 'unknown'
 export type Observability = 'active' | 'stale' | 'gone'
 
 // ---- 通用包裹 ----
@@ -56,8 +57,8 @@ export interface TopologyNode {
   kind: string
   name: string | null
   parentId: string | null
-  status: string
-  observability: string
+  status: ResourceStatus
+  observability: Observability
   staleness: string | null
   lastSeenAt: string
   isPlaceholder: boolean
@@ -93,8 +94,8 @@ export interface WorkloadResourceUsage {
 export interface Workload {
   id: string
   name: string | null
-  status: string
-  observability: string
+  status: ResourceStatus
+  observability: Observability
   staleness: string | null
   attributes: Record<string, unknown>
   resourceUsage: WorkloadResourceUsage

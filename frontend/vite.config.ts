@@ -14,5 +14,16 @@ export default defineConfig(({ mode }) => {
         '/api': { target, changeOrigin: true },
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'react-vendor': ['react', 'react-dom', 'react-router-dom', '@tanstack/react-query', 'zustand'],
+            antd: ['antd'],
+            echarts: ['echarts'],
+          },
+        },
+      },
+    },
   }
 })

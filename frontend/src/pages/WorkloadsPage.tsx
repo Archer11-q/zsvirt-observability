@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Alert, Card, Progress, Select, Space, Table, Tag } from 'antd'
+import { Card, Progress, Select, Space, Table, Tag } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { Link } from 'react-router-dom'
+import { QueryError } from '../components/QueryError'
 import { api } from '../api/endpoints'
 import { useDict } from '../lib/dict'
 import { fmtBytes } from '../lib/format'
@@ -89,7 +90,7 @@ export default function WorkloadsPage() {
       }
     >
       {q.isError ? (
-        <Alert type="error" showIcon message="加载失败" description={String((q.error as Error).message)} />
+        <QueryError error={q.error} onRetry={() => q.refetch()} />
       ) : (
         <Table
           rowKey="id"
