@@ -3,6 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query'
 import { Alert, App, Button, Card, Drawer, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { Link } from 'react-router-dom'
+import { QueryError } from '../components/QueryError'
 import { api } from '../api/endpoints'
 import { useDict } from '../lib/dict'
 import { fmtTime } from '../lib/format'
@@ -137,7 +138,7 @@ export default function AlertsPage() {
       </Space>
 
       {q.isError ? (
-        <Alert type="error" showIcon message="加载失败" description={String((q.error as Error).message)} />
+        <QueryError error={q.error} onRetry={() => q.refetch()} />
       ) : (
         <>
           <Table

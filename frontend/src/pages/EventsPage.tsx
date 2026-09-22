@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useInfiniteQuery } from '@tanstack/react-query'
-import { Alert, Button, Card, Drawer, Input, Select, Space, Table, Typography } from 'antd'
+import { Button, Card, Drawer, Input, Select, Space, Table, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import { QueryError } from '../components/QueryError'
 import { api } from '../api/endpoints'
 import { useDict } from '../lib/dict'
 import { fmtTime } from '../lib/format'
@@ -78,7 +79,7 @@ export default function EventsPage() {
       </Space>
 
       {q.isError ? (
-        <Alert type="error" showIcon message="加载失败" description={String((q.error as Error).message)} />
+        <QueryError error={q.error} onRetry={() => q.refetch()} />
       ) : (
         <>
           <Table

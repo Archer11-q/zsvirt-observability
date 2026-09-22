@@ -4,6 +4,7 @@ import { Alert, Button, Card, Empty, Select, Space, Spin, Switch } from 'antd'
 import * as echarts from 'echarts'
 import { api } from '../api/endpoints'
 import { EChart } from '../components/EChart'
+import { QueryError } from '../components/QueryError'
 import { useDict } from '../lib/dict'
 import { fmtTime } from '../lib/format'
 import type { TopologyNode } from '../types'
@@ -114,7 +115,7 @@ export default function TopologyPage() {
       }
     >
       {q.isError ? (
-        <Alert type="error" showIcon message="拓扑加载失败" description={String((q.error as Error).message)} />
+        <QueryError error={q.error} onRetry={() => q.refetch()} />
       ) : q.isPending ? (
         <Spin />
       ) : data && data.nodes.length === 0 ? (

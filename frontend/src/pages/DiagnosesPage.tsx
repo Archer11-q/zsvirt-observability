@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   App,
   Button,
   Card,
@@ -17,6 +16,7 @@ import {
   Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import { QueryError } from '../components/QueryError'
 import { api } from '../api/endpoints'
 import { useDict } from '../lib/dict'
 import { fmtTime } from '../lib/format'
@@ -78,7 +78,7 @@ export default function DiagnosesPage() {
   return (
     <Card title="诊断" extra={<Button type="primary" onClick={() => setOpen(true)}>触发诊断</Button>}>
       {q.isError ? (
-        <Alert type="error" showIcon message="加载失败" description={String((q.error as Error).message)} />
+        <QueryError error={q.error} onRetry={() => q.refetch()} />
       ) : (
         <>
           <Table
@@ -176,6 +176,9 @@ function DiagnosisDetailDrawer({ id, onClose }: { id?: string; onClose: () => vo
             <Tag>{dict.rootCause[d.rootCause] ?? d.rootCause}</Tag>
             <Progress type="circle" size={48} percent={Math.round(d.confidence * 100)} />
             <Typography.Text type="secondary">规则集 {d.ruleSetVersion}</Typography.Text>
+            {d.durationMs != null && (
+              <Typography.Text type="secondary">耗时 {d.durationMs}ms</Typography.Text>
+            )}
           </Space>
 
           <Typography.Title level={5} style={{ marginTop: 16 }}>
@@ -207,6 +210,11 @@ function DiagnosisDetailDrawer({ id, onClose }: { id?: string; onClose: () => vo
             <div key={i} style={{ marginBottom: 8 }}>
               <Typography.Text code>{e.type}</Typography.Text> {e.name}
               {e.value != null && <Typography.Text type="secondary"> = {e.value}</Typography.Text>}
+              {e.source && (
+                <Tag style={{ marginLeft: 8 }} color={e.source === 'simulated' ? 'purple' : 'default'}>
+                  {e.source}
+                </Tag>
+              )}
             </div>
           ))}
 
