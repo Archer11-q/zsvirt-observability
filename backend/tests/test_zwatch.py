@@ -114,6 +114,37 @@ def healthy_payload(at_offset: int = 0) -> dict[str, Any]:
     )
 
 
+def healthy_reading(**overrides: Any) -> Any:
+    """一条**带标签**的 ZWatch 读数。
+
+    `labels` 是关键：平台层 ID 桥接（`app/zsvirt/harvest.py`）靠
+    `HostUuid` / `PciDeviceAddress` / `GpuSerialNumber` 拼 `{kind}:zsvirt:{uuid}`。
+    """
+    from app.zsvirt import GpuMetricReading
+
+    defaults: dict[str, Any] = {
+        "sampled_at": BASE,
+        "origin": "zsvirt-zwatch",
+        "gpu_serial": SERIAL,
+        "host_mem_usage_pct": 41.2,
+        "self_vgpu_mem_usage_pct": 41.2,
+        "utilization_pct": 37.5,
+        "mem_used_bytes": None,
+        "mem_total_bytes": 24576 * 1024 * 1024,
+        "temperature_c": 62.0,
+        "quota_bytes": None,
+        "allocated_bytes": None,
+        "attribution": "passthrough",
+        "labels": {
+            "HostUuid": "host-uuid-1",
+            "PciDeviceAddress": "0000:01:00.0",
+            "GpuSerialNumber": SERIAL,
+        },
+    }
+    defaults.update(overrides)
+    return GpuMetricReading(**defaults)
+
+
 def _client(transport: FakeTransport, *, token: str = "tok", **config_kwargs: Any) -> ZWatchClient:
     return ZWatchClient(
         config=ZWatchConfig(endpoint="https://10.0.0.1", **config_kwargs),

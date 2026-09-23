@@ -253,20 +253,24 @@ class TestCrossLayerCorrelation:
         assert not any(a.startswith("gpu:") for a in affected), affected
 
 
-class TestPlatformNamespaceBridgeIsMissing:
-    """把两个**尚未打通**的环节断言成事实（任务 6.2 的诚实产出）。
+class TestPlatformNamespaceBridgeIsWired:
+    """平台命名空间桥接**已落地**（关闭 D-101）。
 
-    这两条不是在测"功能正常"，而是在测"我们知道它还没通"。若将来适配层落地，
-    它们会失败 —— 那正是提醒我们去更新它们的信号。
+    这个测试类此前叫 `...IsMissing`，断言的是"整个代码库没有任何
+    `zsvirt_resource_id()` 调用方"—— 一条刻意记录"我们知道它还没通"的用例，
+    并注明"适配层落地后它会失败，那正是提醒我们更新它的信号"。
+
+    命题方答复确认 ZWatch 已启用（关闭 X-07），桥接随 `app/zsvirt/harvest.py`
+    落地，于是这条信号触发了：现在断言的是**相反**的事实 ——
+    平台命名空间真的会被写出。
     """
 
-    def test_platform_layer_is_marked_critical(self) -> None:
-        """ZSvirt 平台层缺失是**关键路径**上的阻塞，不是可选项。
+    def test_platform_layer_is_wired_by_the_harvester(self) -> None:
+        """`zsvirt_resource_id()` 必须有真实调用方。
 
-        `zsvirt_resource_id()` 在 `app/normalize/ids.py` 里定义，
-        但**整个代码库没有任何调用方** —— 也就是说目前没有任何代码会写出
-        `host:zsvirt:*` / `gpu:zsvirt:*` 这类资源。所有平台层资源都只能由探针
-        代为上报（形如 `gpu:probe:<agentId>:...`），这在真实部署里是错的。
+        在此之前，平台层资源只能由探针代为上报（形如 `gpu:probe:<agentId>:...`），
+        这在真实部署里是错的命名空间。现在 ZWatch 读数经 `harvest.py` 落图，
+        写出的是 `host:zsvirt:{uuid}` / `gpu:zsvirt:{serial}`。
         """
         from app.normalize.ids import zsvirt_resource_id
 
@@ -286,10 +290,39 @@ class TestPlatformNamespaceBridgeIsMissing:
                     continue
                 callers.append((str(path.relative_to(backend)), number))
 
-        assert callers == [], (
-            f"平台命名空间桥接已被调用（{callers}）—— "
-            "请把本用例与 DEVELOPMENT_PLAN 的外部阻塞项一起更新"
+        assert callers, (
+            "平台命名空间桥接没有任何调用方 —— 平台层资源又只能由探针代报了"
+            "（见 docs/DECISIONS.md D-101）"
         )
+        assert any("harvest" in name for name, _ in callers), callers
+
+    def test_reading_maps_to_platform_namespace_ids(self) -> None:
+        """端到端核对：一条 ZWatch 读数 → `host:zsvirt:*` + `gpu:zsvirt:*`。"""
+        from app.zsvirt.harvest import map_reading
+        from tests.test_zwatch import SERIAL, healthy_reading
+
+        plan = map_reading(healthy_reading())
+
+        by_kind = {u.kind: u for u in plan.updates}
+        assert by_kind["host"].resource_id == "host:zsvirt:host-uuid-1"
+        assert by_kind["gpu"].resource_id == f"gpu:zsvirt:{SERIAL}"
+        assert by_kind["gpu"].parent_id == "host:zsvirt:host-uuid-1", (
+            "GPU 必须挂在平台宿主下，否则图在平台层就断了"
+        )
+
+    def test_vm_resource_is_not_invented_when_uuid_is_unknown(self) -> None:
+        """X-09 未解决 ⇒ **不产出** vm 资源，并如实记录原因。
+
+        编一个 vm ID 会把图"连起来"，但连的是一个不存在的虚拟机 ——
+        评测现场一旦被追问 VM 从哪来，整条跨层链的可信度就没了。
+        """
+        from app.zsvirt.harvest import map_reading
+        from tests.test_zwatch import healthy_reading
+
+        plan = map_reading(healthy_reading())
+
+        assert not any(u.kind == "vm" for u in plan.updates)
+        assert any("X-09" in reason for reason in plan.unresolved), plan.unresolved
 
     def test_probe_fixture_declares_no_vm_so_the_chain_has_a_gap(
         self, client: TestClient, db_engine: Engine

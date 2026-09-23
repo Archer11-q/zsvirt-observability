@@ -2,13 +2,19 @@
 
 | 字段 | 值 |
 |---|---|
-| 文档状态 | **DRAFT v0.1 — 骨架，待技术基线锁定后补全** |
+| 文档状态 | **v1.0 — 已在开发机实测跑通** |
 | 归属 | 全项目真源（产品文档） |
 | 负责人 | 成员 B |
-| 最后更新 | 2026-09-16 |
+| 最后更新 | 2026-09-23 |
 
 > 本文档的目标：**任何人按本文档操作，都能在最小环境里把系统跑起来**，不依赖个人机器私有配置。
-> 当前仓库尚无代码，本文档为骨架 + 已勘测的环境事实。标 `【待确认】` 的部分需团队决策后补全。
+>
+> 后端（FastAPI + PostgreSQL）、探针（纯标准库）、前端（React + Vite）三者均已可运行，
+> 测试 **722 通过 / 1 跳过**。ZSvirt 平台侧已接入（ZWatch 指标渠道 + 平台命名空间桥接）。
+> 依赖清单见 [`DEPENDENCIES.md`](DEPENDENCIES.md)。
+>
+> ZSvirt 测试环境的内网地址、账号与口令**留在团队内部，不写入仓库**
+> （依据 [`SENSITIVE_DATA.md`](SENSITIVE_DATA.md)）；本文档只描述**配置项名称与注入方式**。
 
 ---
 
@@ -39,7 +45,8 @@
 
 ## 3. 首次搭建步骤（骨架）
 
-> **【待确认】** 项目尚未初始化代码与依赖清单，以下命令为**预期形态**，待 B2 阶段实测后定稿。
+> 以下命令已在开发机实测跑通（Python 3.12.11 为**源码编译**到 `~/.local`，
+> 非系统包；PostgreSQL 18.6）。依赖清单见 [`DEPENDENCIES.md`](DEPENDENCIES.md)。
 
 ```bash
 # 1. 获取代码
@@ -76,8 +83,14 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 |---|---|---|---|
 | `DATABASE_URL` | PostgreSQL 连接串 | ✅ | `postgresql+psycopg://user:pass@localhost:5432/zsvirt_obs` |
 | `API_HOST` / `API_PORT` | 监听地址与端口 | ✅ | `0.0.0.0` / `8080` |
-| `ZSVIRT_ENDPOINT` | ZSvirt API 地址 | ✅ | 【待确认】 |
-| `ZSVIRT_AUTH_*` | ZSvirt 凭据（OAuth / 账号） | ✅ | **禁止提交真实凭据** |
+| `ZSVIRT_ENDPOINT` | ZSvirt API 地址（测试环境由命题方提供） | ⬜ | 未配置时 GPU 渠道降级，`/api/health` 报 `ZSVIRT_ENDPOINT_NOT_CONFIGURED` |
+| `ZSVIRT_AUTH_STYLE` | 认证方式：`oauth` \| `accesskey` | ⬜ | `oauth` |
+| `ZSVIRT_AUTH_TOKEN` | OAuth Token（`Authorization: OAuth <token>`） | ⬜ | **禁止提交真实凭据** |
+| `ZSVIRT_ACCESS_KEY` / `ZSVIRT_SECRET_KEY` | `accesskey` 方式登录换会话的凭据 | ⬜ | **禁止提交真实凭据** |
+| `ZSVIRT_VERIFY_TLS` | 是否校验 TLS 证书 | ⬜ | `false`（测试环境为自签证书；如需严格校验改为 `true`） |
+| `ZSVIRT_TIMEOUT_SEC` | ZWatch 请求超时 | ⬜ | `8` |
+| `ZWATCH_WINDOW_MINUTES` | 指标查询窗口（分钟） | ⬜ | `15` |
+| `ZWATCH_CACHE_TTL_SEC` | 读数缓存（秒）。前端每 15s 轮询 workloads，缓存挡住重复查询 | ⬜ | `10` |
 | `ZSVIRT_SYNC_INTERVAL_SEC` | 平台资源清单同步周期 | ⬜ | `30` |
 | **`GPU_PROVIDER`** | **GPU 指标渠道：`zsvirt-zwatch` \| `guest-smi` \| `simulated` \| `auto`** | ⬜ | 默认 `auto`；**无 GPU 环境必须能跑 `simulated`** |
 | **`SIMULATED_DATA_ENABLED`** | 是否启用模拟/降级数据（赛题明文要求） | ⬜ | `false`；演示兜底时 `true` |
@@ -92,6 +105,39 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 | `LOG_LEVEL` | 日志级别 | ⬜ | `INFO` |
 
 **安全约定**：`.env` 必须加入 `.gitignore`；仓库内只提供 `.env.example`。**任何 token、密码、密钥、局域网地址不得进入仓库**（完整规则见 [`SENSITIVE_DATA.md`](SENSITIVE_DATA.md)）。
+
+### 4.2 ZWatch 指标渠道（ZSvirt 平台侧）
+
+命题方已确认测试环境的 ZWatch 查询能力**已启用**（关闭外部阻塞 X-07），
+GPU 指标位于 namespace `ZStack/Host`。适配器见 `backend/app/zsvirt/watch.py`。
+
+**实际调用**：`GetAllMetricMetadata`（`/zwatch/metrics/meta-data`）与
+`GetMetricData`（`/zwatch/metrics`）；指标为 `GpuUtilization` /
+`GpuMemoryUtilization` / `GpuTemperature` / `GpuStatus` / `GpuPowerDraw`。
+完整接口声明见仓库根 [`README.md`](../README.md)「ZSvirt 集成声明」。
+
+**会话有效期**：命题方答复指出 API 会话约 **2 小时**过期（平台授权"永久有效"
+不等于会话永久有效）。适配器实现**提前 5 分钟自动续期**，并在收到 401/403 时
+作废本地会话、**重试一次**。
+
+**两条如实标注的限制**（不要在演示中含糊过去）：
+
+1. 当前环境为 **GPU 直通**（非 vGPU 切分，平台未发现 MDEV 实例）。平台侧
+   **没有**按虚拟机维度的显存占用，因此卡级使用率同时代表宿主与本机 ——
+   读数标注 `attribution=passthrough`、`memUsageScope=card`，
+   "自己超配 vs 邻居干扰"的区分**在直通下不可得**。
+2. `GpuMemoryUtilization` 是**使用率**，不是已用显存字节数（命题方明确）。
+   因此 `memUsedBytes` 在 ZWatch 渠道保持为空 —— 由百分比反推的数字不是观测值，
+   精确字节数需由**虚拟机内探针的 `nvidia-smi`** 提供。
+
+**验证方式**：
+
+```bash
+curl -s localhost:8080/api/health | python -m json.tool | grep -A 12 gpuProvider
+# 关注：mode / available / authStyle / credentialsConfigured / attribution
+```
+
+未配置或不可达时 `available: false` 并给出缺口说明 —— 而**不是**一个看起来正常的 `ok`。
 
 ### 4.1 模拟 / 降级模式（赛题明文要求）
 

@@ -123,6 +123,12 @@ class GpuMetricReading:
     allocated_bytes: int | None = None
     #: 归因口径。默认按原始设计取 `partitioned`；ZWatch 渠道如实报 `passthrough`。
     attribution: AttributionBasis = "partitioned"
+    #: 采集侧的原始标签（ZWatch 的 `HostUuid` / `PciDeviceAddress` /
+    #: `GpuSerialNumber`）。平台层 ID 桥接需要它们把读数锚到
+    #: `{kind}:zsvirt:{uuid}` —— 见 `app/zsvirt/harvest.py`。
+    labels: dict[str, object] = field(default_factory=dict)
+    #: 该读数的额外说明（例如"直通模式下这是卡级使用率"）。
+    notes: list[str] = field(default_factory=list)
 
     @property
     def is_simulated(self) -> bool:
@@ -513,7 +519,14 @@ class ZWatchProvider:
     def read(self, *, at: datetime | None = None) -> GpuMetricReading:
         """读一次指标。取不到样本时**抛错**，不返回 0。"""
         self._ensure_configured()
-        snapshot = self._pick_snapshot(at=at)
+        return self._to_reading(self._pick_snapshot(at=at), at=at)
+
+    def _to_reading(
+        self, snapshot: CardSnapshot, *, at: datetime | None = None
+    ) -> GpuMetricReading:
+        """快照 → 读数。`read()` 与 `read_all()` 共用，避免两处各写一遍
+        而慢慢漂移。"""
+        del at
         if snapshot.mem_usage_pct is None and snapshot.utilization_pct is None:
             raise GpuMetricsUnavailable(
                 f"GPU {snapshot.gpu_identity} 在查询窗口内没有显存/利用率采样"
@@ -545,7 +558,24 @@ class ZWatchProvider:
             quota_bytes=None,
             allocated_bytes=None,
             attribution="passthrough",
+            labels=dict(snapshot.labels),
+            notes=[
+                "GPU 直通模式：memUsagePct 是**卡级**使用率，不是本虚拟机占用",
+                "memUsedBytes 缺失：GpuMemoryUtilization 是使用率，不是字节数",
+            ],
         )
+
+    def read_all(self, *, at: datetime | None = None) -> list[GpuMetricReading]:
+        """读**所有**可见 GPU 的读数。
+
+        ZWatch 的 namespace 是 `ZStack/Host`，一块宿主上的卡都会返回。
+        单独一个 `read()` 只能给一块卡，而平台层落图需要全部卡。
+        """
+        self._ensure_configured()
+        snapshots = self._snapshot_list()
+        if not snapshots:
+            raise GpuMetricsUnavailable("ZWatch 渠道在查询窗口内没有返回任何 GPU 指标样本")
+        return [self._to_reading(s, at=at) for s in snapshots]
 
     # ---- 内部 -------------------------------------------------------
 
