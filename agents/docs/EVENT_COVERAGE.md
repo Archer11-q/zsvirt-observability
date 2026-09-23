@@ -40,9 +40,14 @@
 | `type` | severity | 状态 | 依据 |
 |---|---|---|---|
 | `vm.disk.io_saturated` | warning | **可选场景**（D-071 降级）：可经 `/proc/diskstats` util 差分实现，赛题非必需 | `DIAGNOSIS_DESIGN.md` §5.4 |
-| `gpu.memory.exhausted` | critical | **主责在 B**（D-028 GPU 三层分工：zsvirt-adapter / ZWatch / 探针 / 模拟）。探针的 `collector/gpu.py` 已预留：若 X-04 确认 VM 内直通 GPU 且可用 `nvidia-smi`，A 可启用本地采集作为补充渠道 | X-04 |
-| `gpu.utilization.high` | warning | 归 B（ZWatch 渠道，X-05 是否启用待命题方） | X-05 / X-07 |
+| `gpu.memory.exhausted` | critical | **事件仍由 B 产生**（综合访客层 + ZWatch 判断自身超配 vs 邻居干扰）。命题方已确认 GPU **直通**（X-04 部分关闭），故探针的 `collector/gpu.py` **已实现**访客层采集：`gpu` 资源带 `memUsedBytes`/`processes[]`（nvidia-smi），作为 B 交叉验证依据 | X-04（直通已确认） |
+| `gpu.utilization.high` | warning | 归 B（ZWatch 渠道，命题方已确认启用，X-07 关闭） | X-05 / X-07 |
 | `vgpu.quota.exceeded` | critical | 归 B（ZSvirt 平台侧配额数据，探针在 VM 内无法观测） | D-028 |
+
+> **探针的 GPU 访客层采集已实现**（2026-09-23）：`collector/gpu.py` 执行 `nvidia-smi`
+> 采集 `gpu` 资源（`sourceId` = GPU UUID），`attributes` 携带 `uuid`/`model`/`pciAddress`/
+> `memTotalBytes`/`memUsedBytes`/`processes[]`，对应 `DATA_MODEL.md` §2.2 的 **L3 访客层**。
+> 无 nvidia-smi 时静默降级。样例见 `gpu_memory_exhausted.json`（memUsedBytes≈95%，自身超配）。
 
 ### B 侧平台自产（4 项，`source = derived`，与 A 无关）
 

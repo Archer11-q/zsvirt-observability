@@ -19,6 +19,7 @@ from unittest import mock
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parents[1]))  # agents/
 
+from probe.collector import gpu as gpu_mod  # noqa: E402
 from probe.collector.network import NetworkCollector  # noqa: E402
 from probe.collector.process import ProcessCollector  # noqa: E402
 from probe.collector.procutil import container_source_id  # noqa: E402
@@ -132,6 +133,56 @@ class TestNetworkCollector(unittest.TestCase):
             with mock.patch.object(c, "_probe", return_value=True):
                 _, ev = c.collect()
                 self.assertEqual(ev, [])  # 恢复可达，不报
+
+
+class TestGPUCollector(unittest.TestCase):
+    def test_unavailable_returns_empty(self):
+        c = gpu_mod.GPUCollector()
+        with mock.patch.object(gpu_mod, "nvidia_smi_available", return_value=False):
+            resources, events = c.collect()
+        self.assertEqual(resources, [])
+        self.assertEqual(events, [])
+
+    def test_collect_emits_gpu_resource(self):
+        c = gpu_mod.GPUCollector()
+        gpu = {
+            "uuid": "GPU-3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44",
+            "model": "Tesla V100-SXM2-32GB",
+            "pciAddress": "00000000:00:08.0",
+            "memTotalBytes": 34089742336,
+            "memUsedBytes": 10737418240,
+        }
+        procs = [{"pid": 1827, "usedMemBytes": 10737418240}]
+        with mock.patch.object(gpu_mod, "nvidia_smi_available", return_value=True), \
+             mock.patch.object(gpu_mod, "query_gpus", return_value=[gpu]), \
+             mock.patch.object(gpu_mod, "query_compute_processes", return_value=procs):
+            resources, _ = c.collect()
+        self.assertEqual(len(resources), 1)
+        r = resources[0]
+        self.assertEqual(r.kind, "gpu")
+        self.assertEqual(r.source_id, gpu["uuid"])
+        self.assertNotIn(":", r.source_id)  # sourceId 不得含冒号
+        self.assertEqual(r.attributes["memUsedBytes"], 10737418240)
+        self.assertEqual(r.attributes["processes"], procs)
+        self.assertIsNotNone(r.first_seen_at)
+
+    def test_csv_mib_to_bytes(self):
+        # 直接测 CSV 解析：MiB 数值 → 字节
+        rows = [["GPU-abc", "Tesla V100", "32768", "512", "00000000:00:08.0"]]
+        with mock.patch.object(gpu_mod, "nvidia_smi_available", return_value=True), \
+             mock.patch.object(gpu_mod, "_run_smi", return_value=rows):
+            gpus = gpu_mod.query_gpus()
+        self.assertEqual(len(gpus), 1)
+        self.assertEqual(gpus[0]["memTotalBytes"], 32768 * 1024 * 1024)
+        self.assertEqual(gpus[0]["memUsedBytes"], 512 * 1024 * 1024)
+        self.assertEqual(gpus[0]["pciAddress"], "00000000:00:08.0")
+
+    def test_bad_rows_are_skipped(self):
+        # 坏行（缺列 / 非数值）应被跳过，不抛异常
+        rows = [["GPU-x", "Model", "not-a-number", "512", "pci"]]
+        with mock.patch.object(gpu_mod, "nvidia_smi_available", return_value=True), \
+             mock.patch.object(gpu_mod, "_run_smi", return_value=rows):
+            self.assertEqual(gpu_mod.query_gpus(), [])
 
 
 if __name__ == "__main__":

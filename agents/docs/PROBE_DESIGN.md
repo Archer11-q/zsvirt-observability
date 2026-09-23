@@ -45,7 +45,7 @@ agents/
 │       ├── container.py     # 容器采集（Docker socket 清单 + 事件）
 │       ├── ai_service.py    # AI 服务识别（parent 挂容器）
 │       ├── network.py       # 网络可达性探测（container.network.unreachable）
-│       └── gpu.py           # GPU 采集（预留，默认不启用）
+│       └── gpu.py           # GPU 采集（nvidia-smi 访客层，内部容错）
 ├── config.example.json      # 配置样例（JSON，不含任何真实凭据）
 └── README.md                # 构建 / 运行 / 配置说明
 ```
@@ -66,9 +66,10 @@ agents/
 | `container` | Docker `/var/run/docker.sock` API | `container` 资源 + `container.oom_killed` `container.restart` | 清单 10s + 事件流实时 |
 | `ai_service` | 进程 cmdline + 端口探测 | `ai_service` 资源（parent 挂容器）+ `inference.*` | 10s 轮询 |
 | `network` | 容器内 AI 服务端口 TCP connect | `container.network.unreachable`（up→down 转换） | 15s 轮询 |
-| `gpu`（可选） | `nvidia-smi` CSV | VM 内 GPU 指标（若直通） | 10s 轮询 |
+| `gpu` | `nvidia-smi` CSV | VM 内直通 GPU 访客层指标（`memUsedBytes` / `processes[]`） | 10s 轮询 |
 
-> **GPU/vGPU 指标主责在 B 的 `zsvirt-adapter`**（DECISIONS D-028「三层分工 + 可插拔 Provider」）；探针仅在 VM 有 GPU 直通时补充采集，非主渠道。
+> **GPU/vGPU 指标主责在 B 的 `zsvirt-adapter`**（DECISIONS D-028「三层分工 + 可插拔 Provider」）。探针负责 **L3 访客层**：命题方已确认 GPU 直通（X-04 部分关闭），
+> 故探针默认启用 `nvidia-smi` 采集 `gpu` 资源（`memUsedBytes` / `processes[]`，交叉验证自身超配 vs 邻居干扰）；无 `nvidia-smi` 时静默降级、不影响其它采集。
 
 ### 3.2 关键采集手段（全部只读）
 
