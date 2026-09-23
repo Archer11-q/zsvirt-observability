@@ -7,12 +7,17 @@ import { QueryError } from '../components/QueryError'
 import { api } from '../api/endpoints'
 import { useDict } from '../lib/dict'
 import { fmtBytes } from '../lib/format'
+import { useGpuProvider } from '../lib/gpu'
 import { ObsTag, StatusTag } from '../lib/tags'
 import type { Workload } from '../types'
 
 export default function WorkloadsPage() {
   const dict = useDict()
   const [kind, setKind] = useState<string>()
+  // 直通模式下后端给的是**卡级**读数：列名必须跟着变，否则表头「GPU 显存」
+  // 会让人以为这是按这台 VM 拆出来的占用（D-104）。
+  const gpu = useGpuProvider()
+  const cardScope = gpu?.attribution === 'passthrough' ? '（卡级）' : ''
 
   const q = useQuery({
     queryKey: ['workloads', kind],
@@ -25,7 +30,7 @@ export default function WorkloadsPage() {
     { title: '状态', dataIndex: 'status', width: 100, render: (v) => <StatusTag status={v} /> },
     { title: '观测', dataIndex: 'observability', width: 90, render: (v) => <ObsTag observability={v} /> },
     {
-      title: 'GPU 显存',
+      title: `GPU 显存${cardScope}`,
       key: 'mem',
       width: 190,
       render: (_, r) => {
@@ -44,7 +49,7 @@ export default function WorkloadsPage() {
       },
     },
     {
-      title: 'GPU 利用率',
+      title: `GPU 利用率${cardScope}`,
       key: 'util',
       width: 130,
       render: (_, r) => {

@@ -1,5 +1,6 @@
 import { Layout, Menu, theme } from 'antd'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { GpuDataNotice } from './components/GpuDataNotice'
 import { HealthBanner } from './components/HealthBanner'
 import { StatusBar } from './components/StatusBar'
 import TopologyPage from './pages/TopologyPage'
@@ -43,6 +44,7 @@ export default function App() {
         </Layout.Header>
         <Layout.Content style={{ margin: 16 }}>
           <HealthBanner />
+          <GpuDataNotice />
           <Routes>
             <Route path="/" element={<Navigate to="/topology" replace />} />
             <Route path="/topology" element={<TopologyPage />} />

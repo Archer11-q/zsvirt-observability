@@ -11,6 +11,7 @@ const EMPTY: Dict = {
   alertState: {},
   resourceKind: {},
   resourceStatus: {},
+  observability: {},
   eventType: {},
   rootCause: {},
   recommendation: {},
