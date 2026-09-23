@@ -130,8 +130,7 @@ def run_auto_diagnosis(
         return result
 
     rows = {
-        a.id: a
-        for a in session.execute(select(Alert).where(Alert.id.in_(alert_ids))).scalars()
+        a.id: a for a in session.execute(select(Alert).where(Alert.id.in_(alert_ids))).scalars()
     }
 
     threshold = SEVERITY_RANK.get(min_severity, 0)
@@ -197,8 +196,9 @@ def run_auto_diagnosis(
     #
     # 锚点取最高点后，事故内每个成员都落在锚点的向下范围内，
     # "忽略祖先证据"就绝不会滤掉事故自己观测到的东西。
-    clusters = [(root, sorted(members, key=lambda a: a.first_fired_at))
-                for root, members in clusters]
+    clusters = [
+        (root, sorted(members, key=lambda a: a.first_fired_at)) for root, members in clusters
+    ]
 
     for root, members in clusters:
         if len(result.attempted) >= max_diagnoses:
@@ -240,9 +240,7 @@ def run_auto_diagnosis(
     return result
 
 
-def _build_relations(
-    session: Session, resource_ids: list[str]
-) -> dict[tuple[str, str], bool]:
+def _build_relations(session: Session, resource_ids: list[str]) -> dict[tuple[str, str], bool]:
     """`(祖先, 后代) -> True` 的关系表，只覆盖给定资源。
 
     一次算好、按参数传给聚合逻辑，**不用模块级缓存** —— 模块级可变状态在 Web
@@ -261,9 +259,7 @@ def _build_relations(
     return relations
 
 
-def _related(
-    a_id: str, b_id: str, relations: dict[tuple[str, str], bool]
-) -> bool:
+def _related(a_id: str, b_id: str, relations: dict[tuple[str, str], bool]) -> bool:
     """两资源是否互为祖先或相等（方向无关）。"""
     return relations.get((a_id, b_id), False) or relations.get((b_id, a_id), False)
 

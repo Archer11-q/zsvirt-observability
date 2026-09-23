@@ -107,9 +107,7 @@ def build_context(
         # 而 `reachable` 是锚点的可达闭包，两者相交才是既相关又聚焦的事件集。
         events = [e for e in events if e.resource_id in resource_scope]
 
-    evidence = tuple(
-        item for e in events for item in _event_evidence(e)
-    )
+    evidence = tuple(item for e in events for item in _event_evidence(e))
 
     # ---- 告警也是证据，而且质量更高 ----
     #
@@ -333,9 +331,7 @@ def _assert_confidence_reproducible(result: Diagnosis) -> None:
         )
 
 
-def _directed_walk(
-    session: Session, resource_id: str
-) -> tuple[set[str], dict[str, str]]:
+def _directed_walk(session: Session, resource_id: str) -> tuple[set[str], dict[str, str]]:
     """返回 `(自身 + 全部后代, 资源 id → 父 id)`。
 
     **只沿有向关系走。** `load_graph` 是无向闭包：从根向上走到 VM 之后会再向下
@@ -536,9 +532,7 @@ def query_diagnoses(
     return rows[:limit], has_more
 
 
-def root_cause_counts(
-    session: Session, *, created_from: datetime | None = None
-) -> dict[str, int]:
+def root_cause_counts(session: Session, *, created_from: datetime | None = None) -> dict[str, int]:
     """按根因码统计诊断数量（前端"根因 Top N"）。"""
     stmt = select(DiagnosisRow.root_cause, func.count()).group_by(DiagnosisRow.root_cause)
     if created_from is not None:
@@ -624,9 +618,7 @@ def latest_diagnoses_per_owner(
     return chosen
 
 
-def latest_diagnosis_for_resource(
-    session: Session, resource_id: str
-) -> DiagnosisRow | None:
+def latest_diagnosis_for_resource(session: Session, resource_id: str) -> DiagnosisRow | None:
     """取某资源最近一次**点名它**的诊断。
 
     与 `latest_diagnoses_per_owner` 的区别：这个不沿链路归并，只找真正提到该

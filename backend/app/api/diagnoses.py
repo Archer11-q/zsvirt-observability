@@ -94,9 +94,7 @@ def list_diagnoses(
 
     data = DiagnosisListData(
         items=items,
-        rootCauseCounts=diagnosis_service.root_cause_counts(
-            session, created_from=created_from
-        ),
+        rootCauseCounts=diagnosis_service.root_cause_counts(session, created_from=created_from),
     )
 
     return {
@@ -143,9 +141,7 @@ def _evidence_events(session: Session, row: DiagnosisRow) -> list[EventData]:
     找不到的事件**静默跳过**：事件只追加不删除，理论上不会丢；但若历史诊断
     引用了被人工清理过的事件，这里应当少返回一条，而不是让整个详情接口 500。
     """
-    event_ids = sorted(
-        {eid for ev in (row.evidence or []) for eid in (ev.get("eventIds") or [])}
-    )
+    event_ids = sorted({eid for ev in (row.evidence or []) for eid in (ev.get("eventIds") or [])})
     if not event_ids:
         return []
 

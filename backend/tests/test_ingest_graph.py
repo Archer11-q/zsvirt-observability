@@ -51,9 +51,7 @@ class TestIngestBuildsTheGraph:
         ids = set(kinds)
         assert len(body["edges"]) == len([i for i in ids if by_child.get(i) is not None])
 
-    def test_workload_chain_resolution_works_on_ingested_data(
-        self, client: TestClient
-    ) -> None:
+    def test_workload_chain_resolution_works_on_ingested_data(self, client: TestClient) -> None:
         """工作负载的链路归并依赖同一份边表。
 
         边表为空时它只能看到工作负载自己：计数恒为 0、GPU 永远解析不到。
@@ -67,9 +65,7 @@ class TestIngestBuildsTheGraph:
         assert r.status_code == 200, r.text
         item = r.json()["data"]["items"][0]
 
-        assert item["eventCount"] >= 2, (
-            "容器与 AI 服务上的事件没有归并到工作负载 —— 链路解析没生效"
-        )
+        assert item["eventCount"] >= 2, "容器与 AI 服务上的事件没有归并到工作负载 —— 链路解析没生效"
         assert item["alertCount"] >= 1
 
     def test_diagnosis_sees_beyond_the_anchor(self, client: TestClient) -> None:

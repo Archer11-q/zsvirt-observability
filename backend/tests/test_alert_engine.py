@@ -64,9 +64,7 @@ def alerts_of(client: TestClient, **params) -> list[dict]:
 
 
 def seed_resource(session: Session, resource_id: str, kind: str) -> None:
-    upsert_resource(
-        session, resource_id=resource_id, kind=kind, status="running", seen_at=sc.NOW
-    )
+    upsert_resource(session, resource_id=resource_id, kind=kind, status="running", seen_at=sc.NOW)
     session.commit()
 
 
@@ -254,9 +252,7 @@ class TestRuleSet:
 class TestScenarios:
     """标准 1：给定场景事件序列，产生**预期数量**的告警。"""
 
-    def test_scenario_one_produces_gpu_and_inference_alerts(
-        self, client: TestClient
-    ) -> None:
+    def test_scenario_one_produces_gpu_and_inference_alerts(self, client: TestClient) -> None:
         summary = ingest(client, sc.scenario_gpu_memory_exhausted())["alerts"]
         assert summary["created"] == 2, summary
         assert summary["rulesEvaluated"] == len(build_default_rule_set().rules)
@@ -332,16 +328,14 @@ class TestAggregation:
         first = ingest(client, sc.scenario_container_oom(at=sc.NOW))["alerts"]
         assert first["created"] == 2
 
-        second = ingest(
-            client, sc.scenario_container_oom(at=sc.NOW + timedelta(minutes=1))
-        )["alerts"]
+        second = ingest(client, sc.scenario_container_oom(at=sc.NOW + timedelta(minutes=1)))[
+            "alerts"
+        ]
         assert second["created"] == 0, "不应新建告警"
         assert second["updated"] == 2, "应累加到已有告警上"
         assert len(alerts_of(client)) == 2, "告警总数不变"
 
-    def test_repeat_increments_count_and_advances_last_fired(
-        self, client: TestClient
-    ) -> None:
+    def test_repeat_increments_count_and_advances_last_fired(self, client: TestClient) -> None:
         ingest(client, sc.scenario_container_oom(at=sc.NOW))
         later = sc.NOW + timedelta(minutes=1)
         ingest(client, sc.scenario_container_oom(at=later))
@@ -504,9 +498,7 @@ class TestNegativeCases:
         assert summary["updated"] == 0
         assert alerts_of(client) == []
 
-    def test_event_on_wrong_resource_layer_produces_no_alert(
-        self, client: TestClient
-    ) -> None:
+    def test_event_on_wrong_resource_layer_produces_no_alert(self, client: TestClient) -> None:
         """容器事件落在 VM 上 → 规则里的 `resource_kinds` 必须拦住它。
 
         放行的后果是前端把"容器 OOM"显示在一台虚拟机上，运维会查错对象。
@@ -590,9 +582,7 @@ class TestNegativeCases:
         db_session.flush()
         assert len(evaluate_events(db_session, [high], rule_set=rule_set).created) == 1
 
-    def test_min_severity_is_enforced(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_min_severity_is_enforced(self, client: TestClient, db_session: Session) -> None:
         seed_resource(db_session, CONTAINER_ID, ResourceKind.CONTAINER.value)
         quiet = make_event("evt_info", severity=Severity.INFO.value)
         db_session.add(quiet)
@@ -616,9 +606,7 @@ class TestNegativeCases:
 class TestSilence:
     """标准 4：静默期内不产生新告警；到期后恢复。"""
 
-    def test_silenced_alert_is_not_reopened_by_new_evidence(
-        self, client: TestClient
-    ) -> None:
+    def test_silenced_alert_is_not_reopened_by_new_evidence(self, client: TestClient) -> None:
         ingest(client, sc.scenario_container_oom(at=sc.NOW))
         alert = next(a for a in alerts_of(client) if a["ruleId"] == "R-CTR-OOM-010")
 
@@ -628,9 +616,9 @@ class TestSilence:
         )
         assert r.status_code == 200, r.text
 
-        summary = ingest(
-            client, sc.scenario_container_oom(at=sc.NOW + timedelta(minutes=1))
-        )["alerts"]
+        summary = ingest(client, sc.scenario_container_oom(at=sc.NOW + timedelta(minutes=1)))[
+            "alerts"
+        ]
         assert summary["created"] == 0, "静默期内不得新建告警"
         assert summary["skippedSilenced"] == 1, "应报告因静默而只更新了证据"
 
@@ -652,11 +640,7 @@ class TestSilence:
             db_session,
             "alert_silenced_expired",
             state=AlertState.SILENCED.value,
-            labels={
-                "silencedUntil": (
-                    sc.NOW + timedelta(minutes=1)
-                ).isoformat()
-            },
+            labels={"silencedUntil": (sc.NOW + timedelta(minutes=1)).isoformat()},
             last_fired_at=sc.NOW - timedelta(minutes=1),
         )
         db_session.commit()
@@ -668,9 +652,7 @@ class TestSilence:
         after = next(a for a in alerts_of(client) if a["id"] == alert_id)
         assert after["state"] == AlertState.FIRING.value
 
-    def test_silence_does_not_expire_early(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_silence_does_not_expire_early(self, client: TestClient, db_session: Session) -> None:
         seed_resource(db_session, CONTAINER_ID, ResourceKind.CONTAINER.value)
         alert_id = seed_alert(
             db_session,
@@ -740,9 +722,7 @@ class TestRecovery:
         assert resolved[stale]["resolvedAt"] is not None, "必须写入 resolvedAt"
         assert fresh not in resolved, "证据刚来过，不得判定恢复"
 
-    def test_fresh_alert_is_not_resolved(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_fresh_alert_is_not_resolved(self, client: TestClient, db_session: Session) -> None:
         """证据还在来，就不能判定恢复。"""
         seed_resource(db_session, CONTAINER_ID, ResourceKind.CONTAINER.value)
         seed_alert(db_session, "alert_fresh_only", last_fired_at=sc.NOW)
@@ -778,9 +758,7 @@ class TestRecovery:
         assert old_id not in new_ids, "不得复活已恢复的历史记录"
         assert summary["created"] >= 1
 
-        oom = next(
-            a for a in alerts_of(client, state="firing") if a["ruleId"] == "R-CTR-OOM-010"
-        )
+        oom = next(a for a in alerts_of(client, state="firing") if a["ruleId"] == "R-CTR-OOM-010")
         assert oom["id"] != old_id
 
         # 历史那条仍保留**原有的**恢复时刻（引擎不得改写已恢复的记录）
@@ -859,9 +837,7 @@ class TestSeverity:
         """
         ingest(
             client,
-            sc.single_event_batch(
-                event_type="container.restart", severity=Severity.CRITICAL.value
-            ),
+            sc.single_event_batch(event_type="container.restart", severity=Severity.CRITICAL.value),
         )
         alert = alerts_of(client)[0]
         assert alert["ruleId"] == "R-CTR-RESTART-011"
@@ -871,9 +847,7 @@ class TestSeverity:
         """事件报 info，但规则认定这属于严重问题 → 保持规则的级别。"""
         ingest(
             client,
-            sc.single_event_batch(
-                event_type="container.oom_killed", severity=Severity.INFO.value
-            ),
+            sc.single_event_batch(event_type="container.oom_killed", severity=Severity.INFO.value),
         )
         assert alerts_of(client)[0]["severity"] == Severity.CRITICAL.value
 

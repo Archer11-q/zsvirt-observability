@@ -129,9 +129,7 @@ class TestAutomaticLinkage:
         first = next(a for a in alerts_of(client) if a["ruleId"] == "R-CTR-OOM-010")
         assert first["diagnosisId"] is not None
 
-        second = ingest(
-            client, sc.scenario_container_oom(at=sc.NOW + timedelta(minutes=1))
-        )
+        second = ingest(client, sc.scenario_container_oom(at=sc.NOW + timedelta(minutes=1)))
 
         assert second["alerts"]["created"] == 0, "不应新建告警"
         auto = second["alerts"]["autoDiagnosis"]
@@ -173,8 +171,11 @@ class TestAutoDiagnosisGuards:
 
     def test_resolved_alert_is_skipped(self, client: TestClient, db_session: Session) -> None:
         upsert_resource(
-            db_session, resource_id=CONTAINER_ID, kind=ResourceKind.CONTAINER.value,
-            status="running", seen_at=sc.NOW,
+            db_session,
+            resource_id=CONTAINER_ID,
+            kind=ResourceKind.CONTAINER.value,
+            status="running",
+            seen_at=sc.NOW,
         )
         alert_id = seed_alert(db_session, "alert_resolved", state=AlertState.RESOLVED.value)
         db_session.commit()
@@ -186,8 +187,11 @@ class TestAutoDiagnosisGuards:
     def test_silenced_alert_is_skipped(self, client: TestClient, db_session: Session) -> None:
         """静默是"别打扰我"，其中也包括别自动跑分析。"""
         upsert_resource(
-            db_session, resource_id=CONTAINER_ID, kind=ResourceKind.CONTAINER.value,
-            status="running", seen_at=sc.NOW,
+            db_session,
+            resource_id=CONTAINER_ID,
+            kind=ResourceKind.CONTAINER.value,
+            status="running",
+            seen_at=sc.NOW,
         )
         alert_id = seed_alert(db_session, "alert_silenced", state=AlertState.SILENCED.value)
         db_session.commit()
@@ -195,12 +199,13 @@ class TestAutoDiagnosisGuards:
         result = run_auto_diagnosis(db_session, [alert_id], now=sc.NOW)
         assert result.skipped_not_firing == [alert_id]
 
-    def test_existing_diagnosis_is_respected(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_existing_diagnosis_is_respected(self, client: TestClient, db_session: Session) -> None:
         upsert_resource(
-            db_session, resource_id=CONTAINER_ID, kind=ResourceKind.CONTAINER.value,
-            status="running", seen_at=sc.NOW,
+            db_session,
+            resource_id=CONTAINER_ID,
+            kind=ResourceKind.CONTAINER.value,
+            status="running",
+            seen_at=sc.NOW,
         )
         db_session.add(
             Diagnosis(
@@ -230,12 +235,13 @@ class TestAutoDiagnosisGuards:
         self, client: TestClient, db_session: Session
     ) -> None:
         upsert_resource(
-            db_session, resource_id=CONTAINER_ID, kind=ResourceKind.CONTAINER.value,
-            status="running", seen_at=sc.NOW,
+            db_session,
+            resource_id=CONTAINER_ID,
+            kind=ResourceKind.CONTAINER.value,
+            status="running",
+            seen_at=sc.NOW,
         )
-        warning_id = seed_alert(
-            db_session, "alert_warning", severity=Severity.WARNING.value
-        )
+        warning_id = seed_alert(db_session, "alert_warning", severity=Severity.WARNING.value)
         db_session.commit()
 
         default = run_auto_diagnosis(db_session, [warning_id], now=sc.NOW)
@@ -298,8 +304,11 @@ class TestAutoDiagnosisGuards:
         增值能力不能反过来毁掉主流程。
         """
         upsert_resource(
-            db_session, resource_id=CONTAINER_ID, kind=ResourceKind.CONTAINER.value,
-            status="running", seen_at=sc.NOW,
+            db_session,
+            resource_id=CONTAINER_ID,
+            kind=ResourceKind.CONTAINER.value,
+            status="running",
+            seen_at=sc.NOW,
         )
         alert_id = seed_alert(db_session, "alert_boom")
         db_session.commit()
@@ -320,9 +329,7 @@ class TestAutoDiagnosisGuards:
         assert row.diagnosis_id is None
         assert row.state == AlertState.FIRING.value
 
-    def test_missing_alert_is_not_a_failure(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_missing_alert_is_not_a_failure(self, client: TestClient, db_session: Session) -> None:
         result = run_auto_diagnosis(db_session, ["alert_does_not_exist"], now=sc.NOW)
         assert result.failed == {}
         assert result.attempted == []

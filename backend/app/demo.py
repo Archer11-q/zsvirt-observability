@@ -248,12 +248,9 @@ def collect(session: Session) -> dict[str, Any]:
         ],
         "topology": {
             "nodes": [
-                {"id": r.id, "kind": r.kind, "name": r.name, "parentId": r.parent_id}
-                for r in nodes
+                {"id": r.id, "kind": r.kind, "name": r.name, "parentId": r.parent_id} for r in nodes
             ],
-            "edges": [
-                {"parentId": e.parent_id, "childId": e.child_id} for e in edges
-            ],
+            "edges": [{"parentId": e.parent_id, "childId": e.child_id} for e in edges],
         },
         "resourceKinds": dict(
             session.execute(
@@ -280,6 +277,7 @@ CAUSE_LABELS = {
 
 def render(report: dict[str, Any], *, out=sys.stdout) -> None:
     """把报告渲染成给人看的文本。**开头必须声明数据来源**。"""
+
     def line(text_: str = "") -> None:
         out.write(text_ + "\n")
 
@@ -294,8 +292,10 @@ def render(report: dict[str, Any], *, out=sys.stdout) -> None:
     line()
 
     counts = report["counts"]
-    line(f"资源 {counts['resources']}  边 {counts['edges']}  "
-         f"告警 {counts['alerts']}  诊断 {counts['diagnoses']}")
+    line(
+        f"资源 {counts['resources']}  边 {counts['edges']}  "
+        f"告警 {counts['alerts']}  诊断 {counts['diagnoses']}"
+    )
     line()
 
     line("-" * 74)
@@ -314,9 +314,7 @@ def render(report: dict[str, Any], *, out=sys.stdout) -> None:
     if not report["alerts"]:
         line("  （无）")
     for alert in report["alerts"]:
-        line(
-            f"  [{alert['severity']:8s}] {alert['ruleId']:22s} {alert['title']}"
-        )
+        line(f"  [{alert['severity']:8s}] {alert['ruleId']:22s} {alert['title']}")
         line(
             f"            资源={alert['resourceId']}  状态={alert['state']}  "
             f"触发次数={alert['count']}  证据={len(alert['evidenceEventIds'])} 条"

@@ -89,9 +89,7 @@ class TestDemoRunner:
         assert len(SCENARIO_NAMES) >= 5
 
     @pytest.mark.parametrize("name", list(EXPECTED_CAUSE))
-    def test_scenario_produces_expected_root_cause(
-        self, db_session: Session, name: str
-    ) -> None:
+    def test_scenario_produces_expected_root_cause(self, db_session: Session, name: str) -> None:
         """**演示的核心断言**：每个场景必须给出预期根因。
 
         这条把"演示能跑"与"演示讲得通"绑在一起 —— 只断言"产生了诊断"
@@ -140,9 +138,7 @@ class TestDemoRunner:
                 f"{name} 产生 {len(report['diagnoses'])} 条诊断，应为 1 条"
             )
 
-    def test_all_alerts_of_an_incident_share_one_diagnosis(
-        self, db_session: Session
-    ) -> None:
+    def test_all_alerts_of_an_incident_share_one_diagnosis(self, db_session: Session) -> None:
         """事故内**每条**告警都必须关联到同一条结论 —— 不留没有答案的告警。"""
         reset(db_session)
         seed(db_session, ["container_oom"], now=DEMO_NOW, diagnose_warnings=True)
@@ -263,9 +259,7 @@ class TestReportRendering:
         render(collect(db_session), out=buffer)
         assert "（无）" in buffer.getvalue()
 
-    def test_collect_exposes_exactly_one_diagnosis_per_trigger(
-        self, db_session: Session
-    ) -> None:
+    def test_collect_exposes_exactly_one_diagnosis_per_trigger(self, db_session: Session) -> None:
         """一次事故一条结论，且结论 id 互不相同。
 
         `trigger` 里含列表（聚合的 `alertIds`），不能直接作为集合的键 ——
@@ -280,8 +274,10 @@ class TestReportRendering:
         ids = [d["id"] for d in report["diagnoses"]]
         assert len(ids) == len(set(ids)), f"结论 id 重复：{ids}"
 
-        triggers = [json.dumps(d["trigger"], sort_keys=True, ensure_ascii=False)
-                    for d in report["diagnoses"]]
+        triggers = [
+            json.dumps(d["trigger"], sort_keys=True, ensure_ascii=False)
+            for d in report["diagnoses"]
+        ]
         assert len(triggers) == len(set(triggers)), f"同一事故产生了多条结论：{triggers}"
 
     def test_alert_state_is_firing(self, db_session: Session) -> None:

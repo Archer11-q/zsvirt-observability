@@ -46,9 +46,7 @@ def _replayable(data: dict) -> dict:
     """去掉"本来就该不同"与"每次现算"的字段，得到应逐字节一致的载荷。"""
     out = {k: v for k, v in data.items() if k != "duplicate"}
     if isinstance(out.get("alerts"), dict):
-        out["alerts"] = {
-            k: v for k, v in out["alerts"].items() if k != "autoDiagnosis"
-        }
+        out["alerts"] = {k: v for k, v in out["alerts"].items() if k != "autoDiagnosis"}
     return out
 
 

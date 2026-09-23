@@ -187,8 +187,9 @@ def add_alert(
     return alert_id
 
 
-def window_from(moment: datetime = NOW, *, before_minutes: int = 30,
-                after_minutes: int = 30) -> dict[str, str]:
+def window_from(
+    moment: datetime = NOW, *, before_minutes: int = 30, after_minutes: int = 30
+) -> dict[str, str]:
     """构造一个覆盖 `moment` 附近的诊断时间窗（ISO8601，UTC）。"""
     return {
         "from": (moment - timedelta(minutes=before_minutes)).isoformat(),

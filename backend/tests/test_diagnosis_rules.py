@@ -83,9 +83,7 @@ class TestRuleSetConsistency:
         （找邻居 vs 降自己的并发）。这条断言保护的是那个区分能力本身。
         """
         contra = [
-            r
-            for r in build_default_rule_set().rules
-            if r.contradicts == "GPU_MEMORY_EXHAUSTED"
+            r for r in build_default_rule_set().rules if r.contradicts == "GPU_MEMORY_EXHAUSTED"
         ]
         assert contra, "缺少 GPU 归因的反证规则，邻居争用无法与本机超配区分"
 
@@ -140,9 +138,7 @@ class TestScenarioConclusions:
         assert first["confidence"] == second["confidence"]
         assert first["ruleSetVersion"] == second["ruleSetVersion"]
 
-    def test_evidence_contains_both_event_and_alert(
-        self, client: TestClient
-    ) -> None:
+    def test_evidence_contains_both_event_and_alert(self, client: TestClient) -> None:
         """`EvidenceKind.ALERT` 必须真的可达 —— 否则以告警为依据的规则永不命中。"""
         ingest(client, sc.scenario_container_oom())
         diag = next(d for d in diagnoses_of(client) if d["rootCause"] == "CONTAINER_MEMORY_LIMIT")
@@ -200,9 +196,7 @@ class TestContradictionBehaviour:
             "反证规则未生效：本机占用很低时不应得出「本机超配」的结论"
         )
 
-    def test_self_overcommit_wins_when_own_usage_is_high(
-        self, client: TestClient
-    ) -> None:
+    def test_self_overcommit_wins_when_own_usage_is_high(self, client: TestClient) -> None:
         """本机 vGPU 占用也高 → 反证**不**成立，本机超配与邻居争用同时出现。
 
         两条都合理（宿主满、本机也满），诊断不强行二选一，而是把两个候选都列出，
@@ -228,9 +222,7 @@ class TestContradictionBehaviour:
         causes = {d["rootCause"] for d in diagnoses_of(client)}
         assert causes & {"GPU_MEMORY_EXHAUSTED", "GPU_NEIGHBOR_CONTENTION"}, causes
 
-    def test_low_self_usage_is_recorded_as_a_counter_observation(
-        self, client: TestClient
-    ) -> None:
+    def test_low_self_usage_is_recorded_as_a_counter_observation(self, client: TestClient) -> None:
         """反证必须出现在 breakdown 里，运维才能看到"为什么没定成本机超配"。"""
         payload = sc.batch(
             [
@@ -249,16 +241,12 @@ class TestContradictionBehaviour:
         ingest(client, payload)
         assert diagnoses_of(client), "应至少产生一条诊断"
 
-    def test_alert_can_back_a_conclusion_without_raw_events(
-        self, client: TestClient
-    ) -> None:
+    def test_alert_can_back_a_conclusion_without_raw_events(self, client: TestClient) -> None:
         """只有告警、没有原始事件时也应能得出结论。
 
         现实中诊断可能在一个更大的时间窗上运行，原始事件已过期，
         而告警作为聚合后的证据仍然存在。
         """
-        payload = sc.single_event_batch(
-            event_type="container.oom_killed", severity="critical"
-        )
+        payload = sc.single_event_batch(event_type="container.oom_killed", severity="critical")
         ingest(client, payload)
         assert diagnoses_of(client), "应至少产生一条诊断"

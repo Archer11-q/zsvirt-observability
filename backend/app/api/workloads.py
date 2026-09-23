@@ -69,9 +69,7 @@ def list_workloads(
     session: DbSession,
     since: datetime | None = Query(default=None, description="统计窗口起点（默认近 24 小时）"),
     to: datetime | None = Query(default=None, description="统计窗口终点（默认现在）"),
-    kind: str | None = Query(
-        default=None, description="聚合层级，默认 ai_service（C 的 Q10）"
-    ),
+    kind: str | None = Query(default=None, description="聚合层级，默认 ai_service（C 的 Q10）"),
     limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
 ) -> Any:
     """工作负载列表。"""
@@ -147,9 +145,7 @@ def _load_parent_map(session: Session) -> dict[str, str]:
     return {rid: pid for rid, pid in rows if pid}
 
 
-def _resolve_owners(
-    workload_ids: list[str], parents: dict[str, str]
-) -> dict[str, list[str]]:
+def _resolve_owners(workload_ids: list[str], parents: dict[str, str]) -> dict[str, list[str]]:
     """反向映射：`资源 ID → 拥有它的工作负载 ID 列表`（**一对多**）。
 
     这就是"跨层关联"在这个端点上的落地：GPU / vGPU / VM / CONTAINER 上的
@@ -262,23 +258,18 @@ def _gpu_usage_for(
     wanted = sorted({g for gpus in member_gpus.values() for g in gpus})
     if not wanted:
         return {
-            wid: WorkloadResourceUsage(
-                note="链路中无 GPU / vGPU 资源（该服务未绑定 GPU）"
-            )
+            wid: WorkloadResourceUsage(note="链路中无 GPU / vGPU 资源（该服务未绑定 GPU）")
             for wid in workload_ids
         }
 
     gpu_rows = {
-        r.id: r
-        for r in session.execute(select(Resource).where(Resource.id.in_(wanted))).scalars()
+        r.id: r for r in session.execute(select(Resource).where(Resource.id.in_(wanted))).scalars()
     }
 
     result: dict[str, WorkloadResourceUsage] = {}
     for wid, gpus in member_gpus.items():
         if not gpus:
-            result[wid] = WorkloadResourceUsage(
-                note="链路中无 GPU / vGPU 资源（该服务未绑定 GPU）"
-            )
+            result[wid] = WorkloadResourceUsage(note="链路中无 GPU / vGPU 资源（该服务未绑定 GPU）")
             continue
 
         # `or` 会让合法的 0 被后面的值覆盖（"显存占用 0"是好状态，不是缺失），
@@ -307,7 +298,8 @@ def _gpu_usage_for(
             note = (
                 "以下指标未采集到，故为 null（不以 0 代替）："
                 + ", ".join(missing)
-                + "。" + GPU_METRIC_SOURCE_HINT
+                + "。"
+                + GPU_METRIC_SOURCE_HINT
             )
 
         result[wid] = WorkloadResourceUsage(

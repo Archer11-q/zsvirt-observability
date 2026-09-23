@@ -432,9 +432,7 @@ def reconcile(
 # ---------------------------------------------------------------- 静默到期
 
 
-def release_expired_silences(
-    session: Session, *, now: datetime | None = None
-) -> list[str]:
+def release_expired_silences(session: Session, *, now: datetime | None = None) -> list[str]:
     """把静默已到期的告警放回 `firing`。
 
     静默到期**不会自动恢复**（那是 `reconcile` 的职责）：到期只意味着
@@ -445,9 +443,7 @@ def release_expired_silences(
 
     moment = now or datetime.now(UTC)
     rows = list(
-        session.execute(
-            select(Alert).where(Alert.state == AlertState.SILENCED.value)
-        ).scalars()
+        session.execute(select(Alert).where(Alert.state == AlertState.SILENCED.value)).scalars()
     )
     released: list[str] = []
     for alert in rows:

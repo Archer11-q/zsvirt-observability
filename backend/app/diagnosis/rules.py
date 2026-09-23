@@ -390,17 +390,13 @@ def assert_rule_set_is_consistent(rule_set: RuleSet) -> None:
         seen.add(rule.id)
 
         if rule.root_cause not in known_causes:
-            raise AssertionError(
-                f"规则 {rule.id} 引用了未冻结的根因码：{rule.root_cause!r}"
-            )
+            raise AssertionError(f"规则 {rule.id} 引用了未冻结的根因码：{rule.root_cause!r}")
         if rule.contradicts is not None and rule.contradicts not in known_causes:
             raise AssertionError(
                 f"规则 {rule.id} 的 contradicts 不是已冻结的根因码：{rule.contradicts!r}"
             )
         if not rule.match_name:
-            raise AssertionError(
-                f"规则 {rule.id} 的 match_name 为空 —— 它会匹配**所有**同类证据"
-            )
+            raise AssertionError(f"规则 {rule.id} 的 match_name 为空 —— 它会匹配**所有**同类证据")
         unknown_kinds = set(rule.resource_kinds) - known_kinds
         if unknown_kinds:
             raise AssertionError(f"规则 {rule.id} 引用了未知资源类型：{sorted(unknown_kinds)}")

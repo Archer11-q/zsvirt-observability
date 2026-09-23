@@ -274,9 +274,7 @@ class TestTriggerDiagnosis:
         assert r.json()["error"]["code"] == "TRIGGER_TARGET_NOT_FOUND"
 
     def test_unknown_resource_returns_404(self, client: TestClient) -> None:
-        r = client.post(
-            "/api/v1/diagnoses", json={"anchorResourceId": "vm:zsvirt:nope"}
-        )
+        r = client.post("/api/v1/diagnoses", json={"anchorResourceId": "vm:zsvirt:nope"})
         assert r.status_code == 404
 
     def test_missing_anchor_returns_400(self, client: TestClient) -> None:
@@ -284,9 +282,7 @@ class TestTriggerDiagnosis:
         assert r.status_code == 400
         assert r.json()["error"]["code"] == "INVALID_ARGUMENT"
 
-    def test_inverted_window_returns_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_inverted_window_returns_400(self, client: TestClient, db_session: Session) -> None:
         f.build_chain(db_session)
         db_session.commit()
 
@@ -303,9 +299,7 @@ class TestTriggerDiagnosis:
         assert r.status_code == 400
         assert "from 必须早于 to" in r.json()["error"]["message"]
 
-    def test_malformed_window_returns_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_malformed_window_returns_400(self, client: TestClient, db_session: Session) -> None:
         f.build_chain(db_session)
         db_session.commit()
 
@@ -319,9 +313,7 @@ class TestTriggerDiagnosis:
         assert r.status_code == 400
         assert "ISO8601" in r.json()["error"]["message"]
 
-    def test_failed_trigger_writes_nothing(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_failed_trigger_writes_nothing(self, client: TestClient, db_session: Session) -> None:
         """参数非法时**不落库** —— 否则列表里会堆满空诊断。"""
         f.build_chain(db_session)
         db_session.commit()
@@ -420,15 +412,11 @@ class TestGetDiagnosis:
         from app.models import Event
 
         db_session.execute(
-            Event.__table__.delete().where(
-                Event.id == "evt_0000000000000000000000002"
-            )
+            Event.__table__.delete().where(Event.id == "evt_0000000000000000000000002")
         )
         db_session.commit()
 
-        r = client.get(
-            f"/api/v1/diagnosis/{created['id']}", params={"includeEvidence": "true"}
-        )
+        r = client.get(f"/api/v1/diagnosis/{created['id']}", params={"includeEvidence": "true"})
         assert r.status_code == 200, r.text
         assert {e["id"] for e in r.json()["data"]["evidenceEvents"]} == {
             "evt_0000000000000000000000001"
@@ -481,9 +469,7 @@ class TestListDiagnoses:
         )
         db_session.commit()
 
-        first = self._make(
-            client, db_session, anchor=f.AIS, at=f.NOW - timedelta(hours=2)
-        )
+        first = self._make(client, db_session, anchor=f.AIS, at=f.NOW - timedelta(hours=2))
         second = self._make(client, db_session, anchor=f.AIS, at=f.NOW)
 
         data = client.get("/api/v1/diagnoses").json()["data"]
@@ -533,14 +519,10 @@ class TestListDiagnoses:
         self._make(client, db_session, anchor=f.AIS)
 
         for rid in (f.CTR, f.VM, f.GPU):
-            body = client.get(
-                "/api/v1/diagnoses", params={"resourceId": rid}
-            ).json()
+            body = client.get("/api/v1/diagnoses", params={"resourceId": rid}).json()
             assert len(body["data"]["items"]) == 1, f"{rid} 未被检索到"
 
-        other = client.get(
-            "/api/v1/diagnoses", params={"resourceId": "vm:zsvirt:unrelated"}
-        ).json()
+        other = client.get("/api/v1/diagnoses", params={"resourceId": "vm:zsvirt:unrelated"}).json()
         assert other["data"]["items"] == []
 
     def test_filter_by_root_cause(
@@ -549,9 +531,7 @@ class TestListDiagnoses:
         seed_scenario(db_session)
         self._make(client, db_session, anchor=f.AIS)
 
-        hit = client.get(
-            "/api/v1/diagnoses", params={"rootCause": "GPU_MEMORY_EXHAUSTED"}
-        ).json()
+        hit = client.get("/api/v1/diagnoses", params={"rootCause": "GPU_MEMORY_EXHAUSTED"}).json()
         assert len(hit["data"]["items"]) == 1
 
         miss = client.get("/api/v1/diagnoses", params={"rootCause": "UNKNOWN"}).json()

@@ -333,9 +333,7 @@ def assert_rules_are_consistent(rule_set: RuleSet) -> None:
             "<",
             "==",
         ):
-            raise AssertionError(
-                f"规则 {rule.id} 的比较符非法：{condition.metric.comparator!r}"
-            )
+            raise AssertionError(f"规则 {rule.id} 的比较符非法：{condition.metric.comparator!r}")
 
     # 三类场景都必须有规则覆盖，否则赛题要求没被满足
     covered = {r.condition.event_type for r in rule_set.rules}

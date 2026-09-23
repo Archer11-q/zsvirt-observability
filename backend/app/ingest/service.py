@@ -199,9 +199,7 @@ def ingest_batch(
             # 先在**本批声明**里查父类型；查不到再退回按层级推断。
             # 推断只是兜底 —— 它对 `process` 这类"父可能是容器也可能是 VM"的层级
             # 必然有一半是错的，而错的代价是整批外键违约。
-            parent_kind = declared_kinds.get(item.parentSourceId) or _infer_parent_kind(
-                item.kind
-            )
+            parent_kind = declared_kinds.get(item.parentSourceId) or _infer_parent_kind(item.kind)
             parent_global, parent_is_placeholder = _resolve_resource_id(
                 session,
                 kind=parent_kind,

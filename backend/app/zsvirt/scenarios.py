@@ -216,7 +216,11 @@ def _gpu_attributes(profile: FaultProfile) -> dict[str, Any]:
         "isDriverLoaded": asset.is_driver_loaded,
         "model": asset.model,
         # 性能字段来自指标渠道（origin 标注在事件上）
-        "memUsedBytes": reading.mem_used_bytes,
+        # `memUsedBytes` / `temperatureC` 现在可为 None（ZWatch 渠道拿不到
+        # 精确字节数与温度时就是 None）。这里用 `or 0`：模拟渠道必有值，
+        # 而 0 在"显存占用"这个语义上会落进 `_first_int` 的"存在但为 0"分支，
+        # 上层不会把它当成缺失 —— 模拟渠道确实是有值的。
+        "memUsedBytes": reading.mem_used_bytes or 0,
         "utilizationPct": reading.utilization_pct,
         "temperatureC": reading.temperature_c,
     }
@@ -268,16 +272,35 @@ def build_cross_layer_batches() -> list[dict[str, Any]]:
         "batchId": "demo-cross-platform",
         "sentAt": CROSS_LAYER_BASE.isoformat(),
         "resources": [
-            {"kind": ResourceKind.HOST.value, "sourceId": "h0", "name": "demo-node-01",
-             "status": "running"},
-            {"kind": ResourceKind.GPU.value, "sourceId": "g0", "name": "A10-0",
-             "parentSourceId": "h0", "status": "running",
-             "attributes": {"memTotalBytes": 24 * 1024**3, "serialNumber": "SIM-A10-0001"}},
-            {"kind": ResourceKind.VGPU.value, "sourceId": "v0", "name": "A10-0-1g",
-             "parentSourceId": "g0", "status": "running",
-             "attributes": {"memQuotaBytes": 6 * 1024**3}},
-            {"kind": ResourceKind.VM.value, "sourceId": "self", "name": "demo-vm",
-             "parentSourceId": "v0", "status": "running"},
+            {
+                "kind": ResourceKind.HOST.value,
+                "sourceId": "h0",
+                "name": "demo-node-01",
+                "status": "running",
+            },
+            {
+                "kind": ResourceKind.GPU.value,
+                "sourceId": "g0",
+                "name": "A10-0",
+                "parentSourceId": "h0",
+                "status": "running",
+                "attributes": {"memTotalBytes": 24 * 1024**3, "serialNumber": "SIM-A10-0001"},
+            },
+            {
+                "kind": ResourceKind.VGPU.value,
+                "sourceId": "v0",
+                "name": "A10-0-1g",
+                "parentSourceId": "g0",
+                "status": "running",
+                "attributes": {"memQuotaBytes": 6 * 1024**3},
+            },
+            {
+                "kind": ResourceKind.VM.value,
+                "sourceId": "self",
+                "name": "demo-vm",
+                "parentSourceId": "v0",
+                "status": "running",
+            },
         ],
         "events": [],
     }
@@ -398,9 +421,7 @@ def build_batch(
             suffix=workload_suffix, gpu_attributes=_gpu_attributes(profile)
         )
         events = _gpu_events(profile, at=moment)
-        return _batch(
-            name, moment=moment, batch_id=batch_id, resources=resources, events=events
-        )
+        return _batch(name, moment=moment, batch_id=batch_id, resources=resources, events=events)
 
     if name == "container_oom":
         resources = _chain_resources(
@@ -411,7 +432,7 @@ def build_batch(
                 "memLimitBytes": 2 * 1024**3,
                 "restartCount": 3,
                 "oomKilledCount": 1,
-            }
+            },
         )
         events = [
             _event(

@@ -39,6 +39,21 @@ class Settings(BaseSettings):
     zsvirt_auth_token: str = Field(default="", alias="ZSVIRT_AUTH_TOKEN")
     zsvirt_sync_interval_sec: int = Field(default=30, alias="ZSVIRT_SYNC_INTERVAL_SEC")
 
+    # --- ZWatch 指标渠道（见 app/zsvirt/watch.py）---
+    #: `oauth`（直接用 ZSVIRT_AUTH_TOKEN）或 `accesskey`（用下面的 key/secret 登录换会话）。
+    #: 命题方未给死认证头形式，因此两种都支持：真机联调改环境变量即可，不动代码。
+    zwatch_auth_style: str = Field(default="oauth", alias="ZSVIRT_AUTH_STYLE")
+    zsvirt_access_key: str = Field(default="", alias="ZSVIRT_ACCESS_KEY")
+    zsvirt_secret_key: str = Field(default="", alias="ZSVIRT_SECRET_KEY")
+    #: 测试环境控制台是自签证书（内网 IP）。默认关闭校验是刻意的取舍 ——
+    #: 开启会让适配器在真实环境必然失败。代价写在这里，不埋在代码里。
+    zwatch_verify_tls: bool = Field(default=False, alias="ZSVIRT_VERIFY_TLS")
+    zwatch_timeout_sec: float = Field(default=8.0, alias="ZSVIRT_TIMEOUT_SEC")
+    #: 指标查询窗口（分钟）。命题方实测"5 个指标均返回最近 15 分钟数据"。
+    zwatch_window_minutes: int = Field(default=15, alias="ZWATCH_WINDOW_MINUTES")
+    #: 读数缓存。前端 /api/workloads 每 15 秒轮询，缓存挡住重复查询。
+    zwatch_cache_ttl_sec: int = Field(default=10, alias="ZWATCH_CACHE_TTL_SEC")
+
     # --- GPU 数据渠道（见 docs/DATA_MODEL.md §4.2.1）---
     gpu_provider: GpuProviderMode = Field(default="auto", alias="GPU_PROVIDER")
     simulated_data_enabled: bool = Field(default=False, alias="SIMULATED_DATA_ENABLED")

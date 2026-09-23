@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from app import __version__
 from app.config import get_settings
 from app.ingest.limits import metrics
+from app.zsvirt import ZWatchProvider
 
 router = APIRouter(tags=["health"])
 
@@ -73,6 +74,59 @@ def probe_database(url: str) -> ComponentStatus:
         )
 
 
+def probe_gpu_provider(settings: object) -> ComponentStatus:
+    """真实探活 GPU 数据渠道。
+
+    **早先这里硬编码 `status="ok"`**，只把配置里的 mode 字符串回显出来。
+    那意味着一个读不到任何 GPU 指标的渠道也会报 ok —— 而"读不到"正是
+    最需要被暴露的缺口（`docs/DATA_MODEL.md` §4.2.1 的诚实性要求）。
+
+    探活失败**不降级整体状态**：模拟渠道兜底是有意设计（赛题要求的降级模式），
+    降级会让 `/api/health` 在整个演示期间都是 degraded，反而失去信号价值。
+    但 `available` 与 `note` 必须如实说明当前用的是哪条路。
+    """
+    configured = getattr(settings, "gpu_provider", "auto")
+    endpoint = getattr(settings, "zsvirt_endpoint", "")
+    token = getattr(settings, "zsvirt_auth_token", "")
+
+    detail: dict = {
+        "mode": getattr(settings, "gpu_provider_mode", configured),
+        "configuredMode": configured,
+        "simulated": getattr(settings, "simulated_data_enabled", False),
+    }
+
+    if detail["simulated"]:
+        detail["note"] = "模拟渠道（SIMULATED_DATA_ENABLED=true）：这些数字不是真实采集"
+        return ComponentStatus(status="ok", detail=detail)
+
+    if not endpoint:
+        # 未配置是**预期状态**（等命题方资源），不是故障。
+        detail["available"] = False
+        detail["error"] = "ZSVIRT_ENDPOINT_NOT_CONFIGURED"
+        return ComponentStatus(status="ok", detail=detail)
+
+    provider = ZWatchProvider(
+        endpoint=endpoint,
+        auth_token=token,
+        auth_style=getattr(settings, "zwatch_auth_style", "oauth"),
+        access_key=getattr(settings, "zsvirt_access_key", ""),
+        secret_key=getattr(settings, "zsvirt_secret_key", ""),
+        timeout_sec=float(getattr(settings, "zwatch_timeout_sec", 8.0)),
+        verify_tls=bool(getattr(settings, "zwatch_verify_tls", False)),
+        cache_ttl_sec=int(getattr(settings, "zwatch_cache_ttl_sec", 10)),
+    )
+    available = provider.is_available()
+    detail["available"] = available
+    detail.update(provider.describe())
+    if not available:
+        detail["error"] = "ZWATCH_UNREACHABLE_OR_UNAUTHORIZED"
+        detail["note"] = (
+            "ZWatch 渠道不可达或未授权：GPU 指标将缺失，"
+            "`/api/v1/workloads` 的 GPU 单元格会显示缺口说明而不是 0"
+        )
+    return ComponentStatus(status="ok", detail=detail)
+
+
 @router.get("/api/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     settings = get_settings()
@@ -98,13 +152,7 @@ def health() -> HealthResponse:
             },
         ),
         "ingest": ComponentStatus(status=ingest_status, detail=ingest_detail),
-        "gpuProvider": ComponentStatus(
-            status="ok",
-            detail={
-                "mode": settings.gpu_provider_mode,
-                "simulated": settings.simulated_data_enabled,
-            },
-        ),
+        "gpuProvider": probe_gpu_provider(settings),
     }
 
     return HealthResponse(

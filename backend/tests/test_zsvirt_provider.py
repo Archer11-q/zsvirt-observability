@@ -58,9 +58,7 @@ class TestSimulatedProviderReproducibility:
         first = SimulatedProvider(seed=5).sample_timeline(samples=3).readings
         random.seed(1)
         second = SimulatedProvider(seed=5).sample_timeline(samples=3).readings
-        assert [r.host_mem_usage_pct for r in first] == [
-            r.host_mem_usage_pct for r in second
-        ]
+        assert [r.host_mem_usage_pct for r in first] == [r.host_mem_usage_pct for r in second]
 
     def test_unknown_profile_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="unknown profile"):
@@ -75,9 +73,7 @@ class TestSimulatedProviderReproducibility:
 
     def test_timeline_is_evenly_spaced_from_the_given_start(self) -> None:
         start = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
-        timeline = SimulatedProvider().sample_timeline(
-            samples=3, step_seconds=20, start=start
-        )
+        timeline = SimulatedProvider().sample_timeline(samples=3, step_seconds=20, start=start)
         stamps = [r.sampled_at for r in timeline.readings]
         assert stamps[0] == start
         assert (stamps[1] - stamps[0]).total_seconds() == 20
@@ -128,9 +124,7 @@ class TestFaultProfiles:
         assert timeline.events() == []
 
     def test_self_exhausted_produces_memory_exhausted_events(self) -> None:
-        timeline = SimulatedProvider(profile="self_exhausted", seed=4).sample_timeline(
-            samples=4
-        )
+        timeline = SimulatedProvider(profile="self_exhausted", seed=4).sample_timeline(samples=4)
         types = {e["type"] for e in timeline.events()}
         assert types == {"gpu.memory.exhausted"}, types
 
@@ -152,9 +146,7 @@ class TestFaultProfiles:
         早期实现把 `allocated_bytes` 从上限 80% 的 `self_pct` 反推，
         于是 `allocated > quota` 永远不成立 —— 剖面存在、不可测。
         """
-        timeline = SimulatedProvider(profile="quota_exceeded", seed=6).sample_timeline(
-            samples=6
-        )
+        timeline = SimulatedProvider(profile="quota_exceeded", seed=6).sample_timeline(samples=6)
         assert any((r.quota_usage_pct or 0) > 100 for r in timeline.readings)
         types = {e["type"] for e in timeline.events()}
         assert "vgpu.quota.exceeded" in types, types
@@ -172,9 +164,7 @@ class TestFaultProfiles:
 
     def test_events_are_ingest_shaped(self) -> None:
         """事件必须是**上报契约形态**的普通字典，演示脚本可以直接塞进 batch。"""
-        timeline = SimulatedProvider(profile="self_exhausted", seed=9).sample_timeline(
-            samples=2
-        )
+        timeline = SimulatedProvider(profile="self_exhausted", seed=9).sample_timeline(samples=2)
         for event in timeline.events():
             assert set(event) <= {"occurredAt", "type", "metrics", "message"}
             assert isinstance(event["metrics"], dict)
@@ -199,11 +189,21 @@ class TestProviderResolution:
             "simulated"
         )
 
-    def test_explicit_zwatch_degrades_instead_of_failing(self) -> None:
+    def test_explicit_zwatch_without_credentials_degrades_instead_of_failing(self) -> None:
+        """显式指定 ZWatch 但没配凭据 ⇒ 降级到模拟并让调用方看到。
+
+        演示现场不能因为一个未接入的渠道而整体起不来（`resolve_provider` 的
+        契约）。但降级**必须可见** —— 降级后 `gpuProviderMode` 会是 simulated。
+        """
         provider = resolve_provider(configured="zsvirt-zwatch")
         assert provider.name == "simulated"
 
-    def test_zwatch_provider_reports_unavailable(self) -> None:
+    def test_zwatch_provider_reports_unavailable_without_credentials(self) -> None:
+        """未配置凭据时报不可用。**这不是"未实现"，是"没配"。**
+
+        （命题方已确认 ZWatch 在测试环境启用，关闭 X-07；因此这条断言的性质
+        变了：从"接口未确认"变成"本机还没拿到凭据"。）
+        """
         assert ZWatchProvider().is_available() is False
 
     def test_zwatch_provider_raises_rather_than_returning_zeros(self) -> None:
@@ -211,9 +211,12 @@ class TestProviderResolution:
 
         返回 0 会被上层当成"显存占用 0%"这个**好消息**，而实际是读不到 ——
         这是最坏的一类错误，因为界面看起来一切正常。
+
+        命题方答复第 03 条亦点名此混淆，因此这里是**契约级不变量**，
+        对真实渠道必须同样成立。
         """
         provider = ZWatchProvider()
-        with pytest.raises(GpuMetricsUnavailable, match="X-07"):
+        with pytest.raises(GpuMetricsUnavailable, match="凭据未配置"):
             provider.read()
         with pytest.raises(GpuMetricsUnavailable):
             provider.assets()

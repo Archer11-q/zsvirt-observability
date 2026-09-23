@@ -38,9 +38,7 @@ def list_workloads(client: TestClient, **params: Any) -> dict[str, Any]:
 
 
 class TestWorkloadShape:
-    def test_every_field_c_named_is_present(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_every_field_c_named_is_present(self, client: TestClient, db_session: Session) -> None:
         """C 的 Q10 点名的字段逐个核对。"""
         f.build_chain(db_session)
         db_session.commit()
@@ -132,9 +130,7 @@ class TestResourceUsageHonesty:
         assert "memUsedBytes" in usage["note"]
         assert "utilizationPct" in usage["note"]
 
-    def test_present_metrics_are_reported(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_present_metrics_are_reported(self, client: TestClient, db_session: Session) -> None:
         f.build_chain(
             db_session,
             gpu_attributes={
@@ -288,12 +284,8 @@ class TestRollupCounts:
 
         f.build_chain(db_session)
         f.add_event(db_session, "evt_1", occurred_at=f.NOW)
-        f.add_alert(
-            db_session, "alert_firing", evidence=["evt_1"], state=AlertState.FIRING.value
-        )
-        f.add_alert(
-            db_session, "alert_acked", evidence=["evt_1"], state=AlertState.ACKED.value
-        )
+        f.add_alert(db_session, "alert_firing", evidence=["evt_1"], state=AlertState.FIRING.value)
+        f.add_alert(db_session, "alert_acked", evidence=["evt_1"], state=AlertState.ACKED.value)
         f.add_alert(
             db_session, "alert_resolved", evidence=["evt_1"], state=AlertState.RESOLVED.value
         )
@@ -328,9 +320,7 @@ class TestRollupCounts:
         assert item["diagnosisId"] is None
         assert item["rootCause"] is None
 
-    def test_linked_diagnosis_is_surfaced(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_linked_diagnosis_is_surfaced(self, client: TestClient, db_session: Session) -> None:
         """证据落在链路下层的诊断，也要出现在链顶服务卡片上。
 
         这正是"跨层关联"的意义：诊断为"容器的 GPU 显存耗尽"，业务方在
@@ -393,9 +383,7 @@ class TestRollupCounts:
 
         assert list_workloads(client)["items"][0]["diagnosisId"] is None
 
-    def test_most_recent_diagnosis_wins(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_most_recent_diagnosis_wins(self, client: TestClient, db_session: Session) -> None:
         from app.models import Diagnosis as DiagnosisRow
 
         f.build_chain(db_session)
@@ -491,14 +479,10 @@ class TestFiltersAndErrors:
         assert r.status_code == 400
 
     def test_inverted_window_returns_400(self, client: TestClient) -> None:
-        r = client.get(
-            "/api/v1/workloads", params={"since": UNTIL, "to": SINCE}
-        )
+        r = client.get("/api/v1/workloads", params={"since": UNTIL, "to": SINCE})
         assert r.status_code == 400
         assert "since 必须早于 to" in r.json()["error"]["message"]
 
     def test_limit_is_enforced(self, client: TestClient) -> None:
-        r = client.get(
-            "/api/v1/workloads", params={"since": SINCE, "to": UNTIL, "limit": 0}
-        )
+        r = client.get("/api/v1/workloads", params={"since": SINCE, "to": UNTIL, "limit": 0})
         assert r.status_code == 422, "limit 越界由 FastAPI 参数校验拒绝"

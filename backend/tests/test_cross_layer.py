@@ -91,21 +91,42 @@ def platform_layer_batch(*, batch_id: str = "01M2ZPLATFORM0000000000001") -> dic
         "batchId": batch_id,
         "sentAt": BASE_TIME.isoformat().replace("+00:00", "Z"),
         "resources": [
-            {"kind": ResourceKind.HOST.value, "sourceId": "h0", "name": "node-01",
-             "status": "running"},
-            {"kind": ResourceKind.GPU.value, "sourceId": "g0", "name": "A10-0",
-             "parentSourceId": "h0", "status": "running",
-             "attributes": {"memTotalBytes": 24 * 1024**3, "serialNumber": "SIM-1"}},
-            {"kind": ResourceKind.VGPU.value, "sourceId": "v0", "name": "A10-0-1g",
-             "parentSourceId": "g0", "status": "running"},
-            {"kind": ResourceKind.VM.value, "sourceId": SELF, "name": "vm0",
-             "parentSourceId": "v0", "status": "running"},
+            {
+                "kind": ResourceKind.HOST.value,
+                "sourceId": "h0",
+                "name": "node-01",
+                "status": "running",
+            },
+            {
+                "kind": ResourceKind.GPU.value,
+                "sourceId": "g0",
+                "name": "A10-0",
+                "parentSourceId": "h0",
+                "status": "running",
+                "attributes": {"memTotalBytes": 24 * 1024**3, "serialNumber": "SIM-1"},
+            },
+            {
+                "kind": ResourceKind.VGPU.value,
+                "sourceId": "v0",
+                "name": "A10-0-1g",
+                "parentSourceId": "g0",
+                "status": "running",
+            },
+            {
+                "kind": ResourceKind.VM.value,
+                "sourceId": SELF,
+                "name": "vm0",
+                "parentSourceId": "v0",
+                "status": "running",
+            },
         ],
         "events": [],
     }
 
 
-def gpu_root_cause_batch(*, value: float = 98.0, batch_id: str = "01M2ZGPUROOT00000000000001") -> dict:
+def gpu_root_cause_batch(
+    *, value: float = 98.0, batch_id: str = "01M2ZGPUROOT00000000000001"
+) -> dict:
     """B 的 GPU 渠道产生的**根因事件**（D-028 的 L2/L3 层）。
 
     挂在与探针症状同一个 vGPU 上，因此两者能落在同一条链上。
@@ -192,9 +213,7 @@ class TestCrossLayerCorrelation:
         names = {e["name"] for d in items for e in d["evidence"]}
         assert EventType.GPU_MEMORY_EXHAUSTED.value in names, names
 
-    def test_without_the_gpu_channel_there_is_no_gpu_conclusion(
-        self, client: TestClient
-    ) -> None:
+    def test_without_the_gpu_channel_there_is_no_gpu_conclusion(self, client: TestClient) -> None:
         """**对照组**：只灌探针症状时不得得出 GPU 根因。
 
         这条比正向用例更重要 —— 它证明上面的结论确实来自跨层关联，
@@ -347,8 +366,7 @@ class TestEventTypeCoverage:
         """**核心断言**：17 项每一项都必须有明确归属，不允许"没人管"。"""
         frozen = {m.value for m in EventType}
         assert frozen == set(self.OWNERSHIP), (
-            f"事件类型与归属表不一致。只在一侧出现："
-            f"{sorted(frozen ^ set(self.OWNERSHIP))}"
+            f"事件类型与归属表不一致。只在一侧出现：{sorted(frozen ^ set(self.OWNERSHIP))}"
         )
 
     def test_ownership_covers_all_four_parties(self) -> None:

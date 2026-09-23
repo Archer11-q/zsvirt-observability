@@ -6,7 +6,7 @@
 
 | 渠道 | 何时可用 | `Observation.origin` |
 |---|---|---|
-| `ZWatchProvider` | ZSvirt premium `zwatch` 指标 API —— **待命题方确认是否启用**（X-07） | `zsvirt-zwatch` |
+| `ZWatchProvider` | ZSvirt `zwatch` 指标 API —— **命题方已确认启用**（X-07 关闭） | `zsvirt-zwatch` |
 | `GuestSmiProvider` | VM 内探针执行 `nvidia-smi` | `probe` |
 | `SimulatedProvider` | **始终可用**，可复现 | `simulated` |
 
@@ -17,22 +17,35 @@
 是为了让"忘了标注来源"在类型层面就不可能发生 —— 一个忘了标注的模拟读数，
 在演示现场会被当成真实 GPU 数据来讲解。
 
-## 关于未实现的 ZWatchProvider / GuestSmiProvider
+## 关于三个渠道的实现状态
 
-它们此刻**不写空壳代码**。原因：ZSvirt 的 `zwatch` 接口是否在测试环境启用尚未
-确认（外部阻塞 X-07），而按未确认的接口写适配器，产出的代码无法验证、
-只能靠猜。本模块把三者的**边界**（`GpuMetricsProvider` 协议）定下来，
-等接口确认后填入实现即可，届时 `resolve_provider()` 的 `auto` 分支不需要改。
-`GuestSmiProvider` 的数据实际由成员 A 的探针采集（探针已在 VM 内跑 `nvidia-smi`），
-因此它的接入点在 ingest 侧（`origin="probe"`），不在本模块。
+- `ZWatchProvider` **已实现**（2026-09-21）。命题方答复确认 ZWatch 查询能力在测试
+  环境已启用、8 个 GET 接口实测可用（关闭外部阻塞 X-07），因此按已确认的路由与
+  指标名实现了真实适配。HTTP 与响应解析在 `app/zsvirt/watch.py`，本模块只做
+  渠道语义的映射（快照 → `GpuMetricReading`）。
+- `GuestSmiProvider` **不由本模块实现**。它的数据实际由成员 A 的探针在 VM 内采集
+  （探针已在跑 `nvidia-smi`），因此接入点在 ingest 侧（`origin="probe"`）。
+- `SimulatedProvider` 始终可用，是赛题明文要求的降级路径。
 """
 
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
+
+from app.zsvirt.watch import (
+    GPU_METRIC_NAMES,
+    CardSnapshot,
+    GpuDeviceInfo,
+    ZWatchClient,
+    ZWatchConfig,
+    ZWatchSchemaError,
+    ZWatchUnavailable,
+    latest_snapshot_per_gpu,
+)
 
 #: 指标来源标识。取值与 `docs/DATA_MODEL.md` §4.2.1 的三层分工一致。
 Origin = Literal["zsvirt-zwatch", "probe", "simulated"]
@@ -71,6 +84,17 @@ class GpuAsset:
     model: str
 
 
+#: 归因口径。直通与 vGPU 切分下"本机占用"是两个不同的量，**不得混为一谈**。
+#:
+#: - `"partitioned"`：本 VM 有独立的 vGPU 分区，`self_vgpu_mem_usage_pct` 是
+#:   该分区的占用 —— 这是原始设计里 GPU 归因的依据。
+#: - `"passthrough"`：整卡直通给本 VM（命题方确认的当前环境）。
+#:   此时平台侧**没有**"本 VM 在卡上占了多少"这个量（无 MDEV 实例），
+#:   因此卡级使用率**同时**代表宿主与本机，两个字段取同一个值，
+#:   而"自己超配 vs 邻居干扰"的区分**在直通下不可得**。
+AttributionBasis = Literal["partitioned", "passthrough"]
+
+
 @dataclass(frozen=True)
 class GpuMetricReading:
     """一次 GPU 指标读数。**`origin` 必填**（见模块文档）。"""
@@ -82,14 +106,23 @@ class GpuMetricReading:
     host_mem_usage_pct: float
     #: 本 VM 的 vGPU 显存使用率（%）。**这才是归因的关键**：
     #: 宿主高 + 本机低 ⇒ 邻居争用；宿主高 + 本机也高 ⇒ 本机超配。
+    #: 直通模式下它与 `host_mem_usage_pct` 相等，见 `attribution`。
     self_vgpu_mem_usage_pct: float
     utilization_pct: float
-    mem_used_bytes: int
-    mem_total_bytes: int
-    temperature_c: float
+    #: 精确已用显存（字节）。**可为 None**：命题方明确 `GpuMemoryUtilization`
+    #: 是使用率而非字节数，没有访客侧 `nvidia-smi`/NVML 数据时拿不到准确字节数。
+    #: 从百分比 ×总容量反推出来的数字**不是观测值**，不写在这里。
+    mem_used_bytes: int | None = None
+    mem_total_bytes: int = 0
+    #: 温度（℃）。**可为 None**：该指标可能缺采样（见 `watch.py` 的
+    #: "读不到 vs 数值为 0" 处理）。
+    temperature_c: float | None = None
     #: 本 VM 的 vGPU 配额（字节）与实际分配。超过配额即 `quota_exceeded`。
+    #: 直通模式下无配额概念，两者皆为 None。
     quota_bytes: int | None = None
     allocated_bytes: int | None = None
+    #: 归因口径。默认按原始设计取 `partitioned`；ZWatch 渠道如实报 `passthrough`。
+    attribution: AttributionBasis = "partitioned"
 
     @property
     def is_simulated(self) -> bool:
@@ -100,6 +133,15 @@ class GpuMetricReading:
         if not self.quota_bytes:
             return None
         return round(100.0 * (self.allocated_bytes or 0) / self.quota_bytes, 2)
+
+    @property
+    def can_attribute(self) -> bool:
+        """能否区分"自己超配"与"邻居干扰"。
+
+        **直通模式下为 False**，这是事实而不是缺陷：没有分区就没有"本机占了多少"。
+        调用方据此避免输出一个它其实证明不了的结论。
+        """
+        return self.attribution == "partitioned"
 
 
 @dataclass
@@ -129,20 +171,13 @@ class ScenarioTimeline:
                         "type": "gpu.memory.exhausted",
                         "metrics": {
                             "value": round(reading.self_vgpu_mem_usage_pct, 1),
-                            "self_vgpu_memory_usage": round(
-                                reading.self_vgpu_mem_usage_pct, 1
-                            ),
+                            "self_vgpu_memory_usage": round(reading.self_vgpu_mem_usage_pct, 1),
                             "host_gpu_memory_usage": round(reading.host_mem_usage_pct, 1),
                         },
-                        "message": (
-                            f"vGPU 显存使用率 {reading.self_vgpu_mem_usage_pct:.1f}%"
-                        ),
+                        "message": (f"vGPU 显存使用率 {reading.self_vgpu_mem_usage_pct:.1f}%"),
                     }
                 )
-            elif (
-                reading.host_mem_usage_pct >= 90.0
-                and reading.self_vgpu_mem_usage_pct < 70.0
-            ):
+            elif reading.host_mem_usage_pct >= 90.0 and reading.self_vgpu_mem_usage_pct < 70.0:
                 # 宿主有压力但本机占用低 → 邻居争用。
                 # 事件类型用**已冻结**的 `gpu.utilization.high`（GPU 算力/资源告急），
                 # 而"是谁占的"由指标对比得出，不由事件类型表达 ——
@@ -154,9 +189,7 @@ class ScenarioTimeline:
                         "metrics": {
                             "value": round(reading.host_mem_usage_pct, 1),
                             "host_gpu_memory_usage": round(reading.host_mem_usage_pct, 1),
-                            "self_vgpu_memory_usage": round(
-                                reading.self_vgpu_mem_usage_pct, 1
-                            ),
+                            "self_vgpu_memory_usage": round(reading.self_vgpu_mem_usage_pct, 1),
                         },
                         "message": (
                             f"宿主 GPU 显存 {reading.host_mem_usage_pct:.1f}%，"
@@ -179,9 +212,7 @@ class ScenarioTimeline:
                             "quota_bytes": reading.quota_bytes,
                             "allocated_bytes": reading.allocated_bytes,
                         },
-                        "message": (
-                            f"vGPU 配额使用 {reading.quota_usage_pct:.1f}%"
-                        ),
+                        "message": (f"vGPU 配额使用 {reading.quota_usage_pct:.1f}%"),
                     }
                 )
             del index
@@ -274,16 +305,12 @@ class SimulatedProvider:
 
     def read(self, *, at: datetime | None = None) -> GpuMetricReading:
         moment = at or datetime.now(UTC)
-        (host_lo, host_hi), (self_lo, self_hi), (quota_lo, quota_hi) = _PROFILE_RANGES[
-            self.profile
-        ]
+        (host_lo, host_hi), (self_lo, self_hi), (quota_lo, quota_hi) = _PROFILE_RANGES[self.profile]
 
         host = round(self._rng.uniform(host_lo, host_hi), 1)
         self_usage = round(self._rng.uniform(self_lo, self_hi), 1)
         quota_usage = round(self._rng.uniform(quota_lo, quota_hi), 1)
-        utilization = round(
-            min(99.0, min(self_usage, 100.0) + self._rng.uniform(-5.0, 8.0)), 1
-        )
+        utilization = round(min(99.0, min(self_usage, 100.0) + self._rng.uniform(-5.0, 8.0)), 1)
 
         total = SIMULATED_GPU.mem_total_bytes
         # 整卡已用 = 宿主使用率；本机占用按本机百分比折算
@@ -340,39 +367,242 @@ class SimulatedProvider:
 
 
 class ZWatchProvider:
-    """ZSvirt premium `zwatch` 指标 API 渠道（**未实现，等待接口确认**）。
+    """ZSvirt `zwatch` 指标 API 渠道（**已实现**，2026-09-21）。
 
-    不写占位实现的原因：`zwatch` 是否在测试环境启用尚未确认（外部阻塞 X-07），
-    按未确认的接口写适配器无法验证。保留类是为了让 `resolve_provider()`
-    的装配点稳定 —— 接口确认后只填 `read()`，不改调用方。
+    依据命题方答复：ZWatch 查询能力在测试环境**已启用**，GPU 指标位于
+    namespace `ZStack/Host`，可取 `GpuUtilization` / `GpuMemoryUtilization` /
+    `GpuTemperature` / `GpuStatus` / `GpuPowerDraw`（关闭外部阻塞 X-07）。
 
-    **`is_available()` 恒为 False**，因此它永远不会被 `auto` 选中，
-    也不会给出任何看似真实的读数。
+    HTTP 与响应解析在 `app/zsvirt/watch.py`；本类只负责**渠道语义**：
+    把一块卡的指标快照映射成 `GpuMetricReading`，并如实标注归因口径。
+
+    ## 两条必须说清楚的限制（都来自命题方答复）
+
+    1. **当前是 GPU 直通，不是 vGPU 切分**。答复明确"本次平台查询未发现 MDEV
+       实例"。直通下平台侧没有按虚拟机维度的显存占用，因此
+       `attribution="passthrough"`：卡级使用率同时代表宿主与本机，
+       "自己超配 vs 邻居干扰"的区分**在本渠道不可得**，要靠访客侧探针补。
+       写 `partitioned` 会让我们输出一个证明不了的结论。
+    2. **`GpuMemoryUtilization` 是使用率，不是字节数**。答复原话：
+       "不应直接写成'已用显存字节数'"。因此 `mem_used_bytes` 保持 `None` ——
+       用百分比乘总容量得到的数字是**推算值**，把它当成观测值会污染证据链
+       （`DIAGNOSIS_DESIGN.md` §4 要求证据可复算）。
+
+    ## 缓存
+
+    `read()` 结果按 `cache_ttl_sec` 缓存。没有缓存的话，前端的
+    `/api/workloads` 15 秒轮询会变成对管理节点的 15 秒一次全量指标查询。
     """
 
     name: Origin = "zsvirt-zwatch"
 
-    def __init__(self, *, endpoint: str = "", auth_token: str = "") -> None:
+    #: 读数缓存时长（秒）。略小于前端 `/api/workloads` 的 15 秒轮询：
+    #: 保证每次轮询都拿到新数据，同时挡住同一请求内的重复查询。
+    DEFAULT_CACHE_TTL_SEC = 10
+
+    def __init__(
+        self,
+        *,
+        endpoint: str = "",
+        auth_token: str = "",
+        auth_style: str = "oauth",
+        access_key: str = "",
+        secret_key: str = "",
+        timeout_sec: float = 8.0,
+        verify_tls: bool = False,
+        cache_ttl_sec: int | None = None,
+        gpu_selector: Callable[[CardSnapshot], bool] | None = None,
+        client: ZWatchClient | None = None,
+    ) -> None:
         self.endpoint = endpoint
         self.auth_token = auth_token
+        self.cache_ttl_sec = (
+            cache_ttl_sec if cache_ttl_sec is not None else self.DEFAULT_CACHE_TTL_SEC
+        )
+        #: 在一台宿主有多块卡时挑出本 VM 直通的那块。默认取最新的那一块；
+        #: 待拿到 VM↔GPU 绑定关系（外部阻塞 X-09）后由调用方传入精确判据。
+        self.gpu_selector = gpu_selector
+        self.client = client or ZWatchClient(
+            config=ZWatchConfig(
+                endpoint=endpoint,
+                auth_style=auth_style,
+                auth_token=auth_token,
+                access_key=access_key,
+                secret_key=secret_key,
+                timeout_sec=timeout_sec,
+                verify_tls=verify_tls,
+            )
+        )
+        self._snapshots: list[CardSnapshot] | None = None
+        self._snapshots_at: float = 0.0
+        self._devices: list[GpuDeviceInfo] = []
+
+    # ---- 探活 -------------------------------------------------------
 
     def is_available(self) -> bool:
-        # 接口未确认（X-07）之前，这个渠道一律不可用 —— 宁可降级到模拟并**说明**，
-        # 也不要对着一个猜出来的 URL 发请求然后返回空数据。
-        return False
+        """真实探活。**不抛异常**（协议要求：探活不该崩）。
+
+        先看凭据是否齐全（零成本），再发一次强制元数据查询（唯一有网络成本的路径）。
+        """
+        if not self.client.session.configured:
+            return False
+        return self.client.ping()
+
+    # ---- 配置信息（供 /api/health 说明"为什么不可用"）----------------
+
+    def describe(self) -> dict[str, object]:
+        """渠道状态详情。**用于暴露缺口，不用于粉饰**。"""
+        return {
+            "endpoint": self.endpoint or None,
+            "authStyle": self.client.session.style,
+            "credentialsConfigured": self.client.session.configured,
+            "attribution": "passthrough",
+            "note": (
+                "命题方确认当前环境为 GPU 直通：平台侧无按虚拟机维度的显存占用，"
+                "归因需结合访客侧探针数据"
+            ),
+        }
+
+    # ---- 静态资产 ---------------------------------------------------
 
     def assets(self) -> list[GpuAsset]:
-        raise GpuMetricsUnavailable(
-            "ZWatch 指标渠道尚未接入：ZSvirt premium `zwatch` 是否在测试环境启用待确认"
-            "（见 docs/DECISIONS.md 外部阻塞 X-07）"
-        )
+        """GPU 静态资产。
+
+        优先 `QueryGpuDevice`（权威：容量/型号/功耗/驱动），取不到时用指标标签
+        兜底 —— 标签里至少有序列号或 PCI 地址，容量缺失时报 0 并在 `model`
+        里标明来源，避免把 0 当成一个容量。
+        """
+        self._ensure_configured()
+        devices = self.client.fetch_gpu_devices()
+        if devices:
+            self._devices = devices
+            return [
+                GpuAsset(
+                    serial_number=d.serial_number,
+                    mem_total_bytes=d.mem_total_bytes,
+                    power_watts=d.power_watts,
+                    is_driver_loaded=d.is_driver_loaded,
+                    pci_address=d.pci_address,
+                    model=d.model,
+                )
+                for d in devices
+            ]
+
+        snapshots = self._snapshot_list()
+        if not snapshots:
+            raise GpuMetricsUnavailable(
+                "ZWatch 渠道读不到任何 GPU 指标样本，且 QueryGpuDevice 无返回"
+                "（检查 ZSVIRT_ENDPOINT / 凭据 / ZWatch 权限）"
+            )
+        return [
+            GpuAsset(
+                serial_number=s.gpu_serial or s.gpu_identity,
+                # 容量未知就报 0：**不猜**。上层已有 note 机制表达"缺失"，
+                # 猜一个容量会让"显存耗尽"的阈值失去意义。
+                mem_total_bytes=0,
+                power_watts=0,
+                is_driver_loaded=True,
+                pci_address=s.pci_address or "",
+                model="GPU (capacity unknown: QueryGpuDevice unavailable)",
+            )
+            for s in snapshots
+        ]
+
+    # ---- 指标读数 ---------------------------------------------------
 
     def read(self, *, at: datetime | None = None) -> GpuMetricReading:
-        del at
-        raise GpuMetricsUnavailable(
-            "ZWatch 指标渠道尚未接入：ZSvirt premium `zwatch` 是否在测试环境启用待确认"
-            "（见 docs/DECISIONS.md 外部阻塞 X-07）"
+        """读一次指标。取不到样本时**抛错**，不返回 0。"""
+        self._ensure_configured()
+        snapshot = self._pick_snapshot(at=at)
+        if snapshot.mem_usage_pct is None and snapshot.utilization_pct is None:
+            raise GpuMetricsUnavailable(
+                f"GPU {snapshot.gpu_identity} 在查询窗口内没有显存/利用率采样"
+            )
+
+        mem_pct = snapshot.mem_usage_pct if snapshot.mem_usage_pct is not None else 0.0
+        util_pct = snapshot.utilization_pct if snapshot.utilization_pct is not None else 0.0
+
+        total = 0
+        for device in self._devices:
+            if device.serial_number in (snapshot.gpu_serial, snapshot.gpu_identity) or (
+                device.pci_address and device.pci_address == snapshot.pci_address
+            ):
+                total = device.mem_total_bytes
+                break
+
+        return GpuMetricReading(
+            sampled_at=snapshot.at,
+            origin=self.name,
+            gpu_serial=snapshot.gpu_serial or snapshot.gpu_identity,
+            host_mem_usage_pct=mem_pct,
+            # 直通：卡级使用率就是本机使用率。**不假装**有分区数据。
+            self_vgpu_mem_usage_pct=mem_pct,
+            utilization_pct=util_pct,
+            # 答复明确：使用率 ≠ 字节数。留 None 而不是反推一个看起来精确的数字。
+            mem_used_bytes=None,
+            mem_total_bytes=total,
+            temperature_c=snapshot.temperature_c,
+            quota_bytes=None,
+            allocated_bytes=None,
+            attribution="passthrough",
         )
+
+    # ---- 内部 -------------------------------------------------------
+
+    def _ensure_configured(self) -> None:
+        """凭据不齐时给出**准确**的失败原因。
+
+        不这么做的话，未配置的渠道会走到"窗口内没有样本"，把"没配"报成
+        "环境没数据" —— 排查方向会被整个带偏。
+        """
+        if not self.client.session.configured:
+            raise GpuMetricsUnavailable(
+                "ZWatch 渠道凭据未配置：请设置 ZSVIRT_AUTH_TOKEN，"
+                "或 ZSVIRT_ACCESS_KEY + ZSVIRT_SECRET_KEY（见 docs/DEPLOYMENT.md §4）"
+            )
+
+    def _snapshot_list(self) -> list[CardSnapshot]:
+        import time as _time
+
+        now = _time.monotonic()
+        if self._snapshots and now - self._snapshots_at < self.cache_ttl_sec:
+            return self._snapshots
+
+        try:
+            samples = self.client.fetch_samples(metrics=GPU_METRIC_NAMES)
+        except ZWatchUnavailable:
+            # 传输失败不缓存：下次调用应该重试，而不是把一次网络抖动
+            # 记住 10 秒。
+            raise
+
+        snapshots = latest_snapshot_per_gpu(samples)
+        if snapshots:
+            self._snapshots = snapshots
+            self._snapshots_at = now
+        else:
+            # 空结果**不缓存**：否则一次"恰好没有采样"的查询会让渠道
+            # 在 TTL 内一直报告"有数据但为空"。
+            self._snapshots = None
+        return snapshots
+
+    def _pick_snapshot(self, *, at: datetime | None = None) -> CardSnapshot:
+        del at  # 查询窗口由 client 处理；这里只选卡
+        snapshots = self._snapshot_list()
+        if not snapshots:
+            raise GpuMetricsUnavailable(
+                "ZWatch 渠道在查询窗口内没有返回任何 GPU 指标样本"
+                "（可能原因：该窗口无采样、权限不足、或响应形状与假设不符 —— "
+                "最后一种会抛 ZWatchSchemaError 而不是走到这里）"
+            )
+        if self.gpu_selector is not None:
+            selected = [s for s in snapshots if self.gpu_selector(s)]
+            if not selected:
+                raise GpuMetricsUnavailable(
+                    f"gpu_selector 未匹配到任何 GPU；候选：{[s.gpu_identity for s in snapshots]}"
+                )
+            snapshots = selected
+        # 默认取最新的一块。多卡宿主上的精确判据依赖 VM↔GPU 绑定（X-09）。
+        return max(snapshots, key=lambda s: s.at)
 
 
 def resolve_provider(
@@ -420,8 +650,11 @@ def describe_provider(provider: GpuMetricsProvider) -> dict[str, object]:
 
 __all__ = [
     "SIMULATED_GPU",
+    "AttributionBasis",
     "FaultProfile",
     "GpuAsset",
+    "ZWatchSchemaError",
+    "ZWatchUnavailable",
     "GpuMetricReading",
     "GpuMetricsProvider",
     "GpuMetricsUnavailable",

@@ -181,9 +181,7 @@ class TestNormalBatch:
         post_batch(client, load("normal"))
         assert client.get("/api/v1/alerts").json()["data"]["items"] == []
 
-    def test_all_five_probe_kinds_are_accepted(
-        self, client: TestClient, db_engine: Engine
-    ) -> None:
+    def test_all_five_probe_kinds_are_accepted(self, client: TestClient, db_engine: Engine) -> None:
         post_batch(client, load("normal"))
         kinds = dict(rows(db_engine, "select kind, count(*) from resource group by kind"))
         assert set(kinds) <= {"container", "process", "ai_service", "agent", "task"}
@@ -354,9 +352,9 @@ class TestNetworkFailure:
         """`agent → task` 的父子边必须落到邻接表（否则诊断看不到 task）。"""
         post_batch(client, load("agent_network_failure"))
         pairs = rows(db_engine, "select parent_id, child_id from resource_edge")
-        assert any(
-            p.startswith("agent:") and c.startswith("task:") for p, c in pairs
-        ), f"缺少 agent→task 边：{pairs}"
+        assert any(p.startswith("agent:") and c.startswith("task:") for p, c in pairs), (
+            f"缺少 agent→task 边：{pairs}"
+        )
 
     def test_produces_the_scenario_three_alert_chain(self, client: TestClient) -> None:
         post_batch(client, load("agent_network_failure"))
@@ -395,9 +393,7 @@ class TestNetworkFailure:
         assert any(a.startswith("task:") for a in affected), affected
         assert diag["onChain"] or diag["potentiallyAffected"] or affected, "三集全空"
 
-    def test_ai_service_chain_stays_unknown_with_weak_evidence(
-        self, client: TestClient
-    ) -> None:
+    def test_ai_service_chain_stays_unknown_with_weak_evidence(self, client: TestClient) -> None:
         """`inference.timeout` / `inference.error` 的证据不足以定根因 → 诚实返回 UNKNOWN。
 
         这是置信下限（0.30）在起作用：有症状、有证据，但没有任何一条规则能给出
@@ -586,17 +582,13 @@ class TestGraphIsIncompleteByDesign:
         self, client: TestClient, db_engine: Engine
     ) -> None:
         post_batch(client, load("normal"))
-        parents = rows(
-            db_engine, "select parent_id from resource where kind = 'container'"
-        )
+        parents = rows(db_engine, "select parent_id from resource where kind = 'container'")
         assert parents, "应有容器资源"
         assert all(p[0] is None for p in parents), (
             "容器不应有父 —— 样例里没有上报 VM，而探针不拥有 VM 的权威"
         )
 
-    def test_topology_returns_only_probe_owned_kinds(
-        self, client: TestClient
-    ) -> None:
+    def test_topology_returns_only_probe_owned_kinds(self, client: TestClient) -> None:
         post_batch(client, load("normal"))
         nodes = client.get("/api/v1/topology", params={"depth": 8}).json()["data"]["nodes"]
         kinds = {n["kind"] for n in nodes}

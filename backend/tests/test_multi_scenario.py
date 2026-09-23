@@ -56,9 +56,7 @@ class TestMultipleIncidentsStaySeparate:
             f"{[(d['rootCause'], d['trigger'].get('clusterSize')) for d in items]}"
         )
 
-    def test_alerts_do_not_share_a_diagnosis_across_incidents(
-        self, client: TestClient
-    ) -> None:
+    def test_alerts_do_not_share_a_diagnosis_across_incidents(self, client: TestClient) -> None:
         """不同事故的告警不得指向同一条结论。"""
         for name in EXPECTED:
             client.post("/api/v1/ingest/batch", json=sc.scenario_for_demo(name))

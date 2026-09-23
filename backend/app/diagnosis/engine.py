@@ -136,14 +136,13 @@ def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
     #
     # 向上关联并没有因此丢失：GPU 故障有自己的告警与自己的诊断，
     # 告警的 `resourceId` 仍然指向它。
-    if any(ev.kind is EvidenceKind.ALERT and ev.resource_id == ctx.anchor_resource_id
-           for ev in relevant):
+    if any(
+        ev.kind is EvidenceKind.ALERT and ev.resource_id == ctx.anchor_resource_id
+        for ev in relevant
+    ):
         ancestor_ids = set(ctx.ancestors(ctx.anchor_resource_id))
         relevant = [ev for ev in relevant if ev.resource_id not in ancestor_ids]
-        notes.append(
-            "锚点自身有告警，因此不考虑其祖先资源上的证据"
-            "（那些故障有自己的告警与诊断）"
-        )
+        notes.append("锚点自身有告警，因此不考虑其祖先资源上的证据（那些故障有自己的告警与诊断）")
 
     if any(ev.is_simulated for ev in relevant):
         notes.append("本次诊断包含模拟数据来源的证据，已在 evidence.source 中标注")

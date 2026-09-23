@@ -296,7 +296,6 @@ class TestImpactScope:
         assert union == {HOST, GPU, VGPU, VM, CTR, AGENT}, "并集覆盖锚点的全部可达资源"
 
 
-
 # ---------------------------------------------------------------- 关系校验
 
 
