@@ -20,10 +20,20 @@ import sys
 import httpx
 
 BASE = "http://127.0.0.1:8000"
-FE = pathlib.Path("/mnt/d/CLion/zsvirt-observability/frontend/src")
-if not FE.exists():
-    FE = pathlib.Path(
-        "/home/archer/workspace/zsvirt-observability/frontend/src"
+
+#: **仓库是真源**，`/mnt/d/...` 只是暂存镜像（可能落后，且不含后端新模块）。
+#: 顺序必须如此：镜像优先过一次，就会对着旧前端得出"✓ 未发现不一致"这种
+#: 假阴性结论 —— 比不跑对账更危险，因为它给了一个可信的外观。
+_REPO_FE = pathlib.Path("/home/archer/workspace/zsvirt-observability/frontend/src")
+_MIRROR_FE = pathlib.Path("/mnt/d/CLion/zsvirt-observability/frontend/src")
+
+FE = _REPO_FE if _REPO_FE.exists() else _MIRROR_FE
+USING_MIRROR = FE != _REPO_FE
+
+if not (FE / "types.ts").exists():
+    raise SystemExit(
+        f"找不到前端源码（尝试过 {_REPO_FE} 与 {_MIRROR_FE}）；"
+        "对账必须在仓库工作区内运行"
     )
 
 TYPES = (FE / "types.ts").read_text(encoding="utf-8")
@@ -31,6 +41,14 @@ ENDPOINTS = (FE / "api/endpoints.ts").read_text(encoding="utf-8")
 
 problems: list[str] = []
 notes: list[str] = []
+
+#: 把"对的是哪一份前端"写进输出。静默推断路径 = 无法发现对错了源。
+notes.append(f"前端源码：{FE}")
+if USING_MIRROR:
+    problems.append(
+        f"正在对账**暂存镜像**而非仓库（{FE}）：镜像会落后，结论不可信。"
+        "请在仓库工作区内运行本脚本"
+    )
 
 
 def declared_types() -> dict[str, tuple[list[str], list[str], str]]:
