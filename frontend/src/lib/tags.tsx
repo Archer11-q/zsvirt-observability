@@ -34,7 +34,12 @@ export function StatusTag({ status }: { status: string }) {
 }
 
 export function ObsTag({ observability }: { observability: string }) {
-  return <Tag color={OBS_COLORS[observability] ?? 'default'}>{observability}</Tag>
+  const dict = useDict()
+  return (
+    <Tag color={OBS_COLORS[observability] ?? 'default'}>
+      {dict.observability[observability] ?? observability}
+    </Tag>
+  )
 }
 
 export function KindTag({ kind }: { kind: string }) {

@@ -33,6 +33,27 @@ export interface ComponentStatus {
   status: string
   detail: Record<string, unknown> | null
 }
+/**
+ * `/api/health` 里 `components.gpuProvider.detail` 的形状（docs/DECISIONS.md D-104）。
+ *
+ * `available` / `attribution` 都是**可选**字段，且语义各不相同：
+ * - `available` **在模拟渠道下不返回**（后端有意为之）。「字段缺失」≠「报告不可用」，
+ *   把它读成 false 会报出假的「GPU 指标读不到」。
+ * - `attribution` 只在配置了 ZSVIRT 端点、真正调用过探针时才有值。
+ */
+export interface GpuProviderDetail {
+  mode?: string
+  configuredMode?: string
+  simulated?: boolean
+  available?: boolean
+  /** 归因口径：`passthrough` = 卡级读数，平台侧无法按 VM 拆分（当前环境） */
+  attribution?: 'partitioned' | 'passthrough'
+  error?: string | null
+  note?: string | null
+  endpoint?: string | null
+  authStyle?: string
+  credentialsConfigured?: boolean
+}
 export interface HealthResponse {
   status: 'ok' | 'degraded' | 'down'
   components: Record<string, ComponentStatus>
@@ -41,11 +62,13 @@ export interface HealthResponse {
 }
 
 // ---- /api/v1/dict ----
+/** 键与后端 `enums.build_dict_payload()` 一一对应（契约 §4.6.1，共 8 段）。 */
 export interface Dict {
   severity: Record<string, string>
   alertState: Record<string, string>
   resourceKind: Record<string, string>
   resourceStatus: Record<string, string>
+  observability: Record<string, string>
   eventType: Record<string, string>
   rootCause: Record<string, string>
   recommendation: Record<string, string>

@@ -36,10 +36,11 @@ src/
   api/client.ts       统一 fetch 客户端（{data,meta} 信封 + 错误模型，区分 502/503）
   api/endpoints.ts    15 个端点封装
   types.ts            与后端 schemas 字段逐一对齐的 TS 类型
-  lib/dict.tsx        字典上下文（GET /api/v1/dict 一次拉取、全局缓存）
+  lib/dict.tsx        字典上下文（GET /api/v1/dict 一次拉取、全局缓存，8 段对齐 build_dict_payload）
   lib/format.ts       时间 / 字节 / 百分比格式化
+  lib/gpu.ts          GPU 渠道诚实标注（解析 /api/health 的 gpuProvider.available / attribution）
   lib/tags.tsx        枚举 → 颜色 / 标签
-  components/         状态条、降级横幅、查询错误、ECharts 封装
+  components/         状态条、降级横幅、GPU 数据说明、查询错误、ECharts 封装
   pages/              拓扑 / 工作负载 / 事件 / 告警 / 诊断
 ```
 
@@ -73,6 +74,8 @@ C **必须通过 API 获取数据，不得直接连接 B 的数据库**（团队
 4. **必须区分上游故障与自身故障**：`502 UPSTREAM_UNAVAILABLE` 与 `503 SERVICE_DEGRADED` 语义不同，`QueryError` 分别给出不同文案。
 5. **错误码是契约**：结构化错误码分支；B 变更错误码属破坏性变更。
 6. **模拟数据必须可见**：`gpuProvider.mode=simulated` 与证据 `source=simulated` 在 UI 内联标注（诚实性），不伪装成真实采集。
+7. **GPU 归因口径必须可见**（D-104）：`gpuProvider.available=false` → 状态条红标签「GPU 指标读不到：<原因>」+ 内容区说明；`gpuProvider.attribution=passthrough` → 状态条橙标签「GPU 直通：卡级读数」+ 内容区说明，且工作负载表头改写为「GPU 显存（卡级）」。**这两条与 `mode=simulated` 一样不能只放在 tooltip 里**（`lib/gpu.ts`、`components/GpuDataNotice.tsx`）。
+   注意 `available` 在模拟渠道下**不返回**：字段缺失 ≠ 报告不可用，`null` 不能当 `false` 用（会报出假的「读不到」）。
 
 ## 前后端对账
 
