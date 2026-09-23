@@ -6,6 +6,32 @@
   "sentAt": "2026-09-17T08:00:09.000Z",
   "resources": [
     {
+      "kind": "gpu",
+      "sourceId": "GPU-3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44",
+      "name": "Tesla V100-SXM2-32GB",
+      "parentSourceId": null,
+      "status": "running",
+      "attributes": {
+        "uuid": "GPU-3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44",
+        "model": "Tesla V100-SXM2-32GB",
+        "pciAddress": "00000000:00:08.0",
+        "memTotalBytes": 34359738368,
+        "memUsedBytes": 32641751450,
+        "processes": [
+          {
+            "pid": 1827,
+            "usedMemBytes": 30064771072
+          },
+          {
+            "pid": 1950,
+            "usedMemBytes": 2576980378
+          }
+        ]
+      },
+      "firstSeenAt": "2026-09-17T08:00:00.000Z",
+      "lastSeenAt": "2026-09-17T08:00:00.000Z"
+    },
+    {
       "kind": "container",
       "sourceId": "8f1a2b3c4d5e",
       "name": "vllm-0",

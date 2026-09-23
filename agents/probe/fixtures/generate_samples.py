@@ -16,7 +16,7 @@ ID 全部确定，测试可复现；真实 = 由探针的**同一套管道**生�
 |---|---|---|
 | `normal.json` | 正常态 | 全部 5 种资源 kind；空 events（测 B 的空批处理） |
 | `container_oom_killed.json` | 场景二 · 容器/进程异常 | container.oom_killed / process.crash / container.restart |
-| `gpu_memory_exhausted.json` | 场景一 · GPU 瓶颈（探针症状侧） | process.io_wait.high；根因事件 gpu.* 归 B（D-028） |
+| `gpu_memory_exhausted.json` | 场景一 · GPU 瓶颈（探针访客层 + 症状） | `gpu` 资源（访客层 memUsedBytes≈95% 自身超配）+ `process.io_wait.high`；根因事件 `gpu.*` 归 B（D-028） |
 | `agent_network_failure.json` | 场景三 · Agent/网络异常 | inference.* / agent.* / container.network.unreachable（X-08 目标格式） |
 
 所有 batchId / agent 与 task 的 sourceId 由固定随机位的 ULID 构成
@@ -58,7 +58,7 @@ EVENT_TYPES = {
     "ingest.resource.unresolved", "zsvirt.sync.failed", "gpu.provider.degraded",
 }
 SEVERITIES = {"info", "warning", "error", "critical"}
-PROBE_KINDS = {"container", "process", "ai_service", "agent", "task"}
+PROBE_KINDS = {"container", "process", "ai_service", "agent", "task", "gpu"}
 ULID_RE = re.compile(r"^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$")
 TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 
@@ -180,13 +180,30 @@ def build_container_oom() -> dict:
 
 
 def build_gpu_exhausted() -> dict:
-    """场景一 · GPU 显存耗尽（探针症状侧）。
+    """场景一 · GPU 显存耗尽（探针症状侧 + 访客层 GPU 数据）。
 
     根因事件 `gpu.memory.exhausted` 由 B 的 zsvirt-adapter 产生（D-028，
-    GPU 数据三层分工）。探针提供 VM 内症状（I/O 等待升高），供 B 做
-    跨层关联测试：GPU 根因事件 × 探针症状事件 × 同一批资源。
+    GPU 数据三层分工）。探针提供两样东西：
+    1. **访客层 GPU 数据**（`gpu` kind，origin=probe）：nvidia-smi 可见的
+       `memUsedBytes`/`processes[]`，用于「自身超配 vs 邻居干扰」交叉验证。
+       本例 `memUsedBytes` ≈ 95% → 指向**自身超配**（DATA_MODEL §2.2）。
+    2. VM 内症状（`process.io_wait.high`）。
+    供 B 做跨层关联测试：GPU 根因事件 × 探针访客层占用 × 症状事件。
     """
     resources = [
+        res(kind="gpu", source_id="GPU-3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44",
+            name="Tesla V100-SXM2-32GB",
+            attributes={
+                "uuid": "GPU-3f2a9c10-4b7e-4d21-9a55-0c8e1f2b3d44",
+                "model": "Tesla V100-SXM2-32GB",
+                "pciAddress": "00000000:00:08.0",
+                "memTotalBytes": 34359738368,   # 32 GiB
+                "memUsedBytes": 32641751450,    # ≈ 95%（自身超配）
+                "processes": [
+                    {"pid": 1827, "usedMemBytes": 30064771072},  # vllm 主进程 28 GiB
+                    {"pid": 1950, "usedMemBytes": 2576980378},   # worker 2.4 GiB
+                ],
+            }),
         res(kind="container", source_id="8f1a2b3c4d5e", name="vllm-0",
             attributes={"image": "vllm/vllm-openai:latest", "runtime": "docker"}),
         res(kind="process", source_id="1847263.1827", name="vllm",
