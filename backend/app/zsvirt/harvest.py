@@ -34,21 +34,32 @@ ZSVirt**。走 `POST /api/v1/ingest/batch` 必须伪造成探针上报的形态�
 - **直通模式下没有按虚拟机的占用**：见 `AttributionBasis`。落进属性里的
   `memUsagePct` 是**卡级**使用率，`attribution` / `memUsageScope` 会把这一点
   一路带到 API 响应，让前端能如实标注。
+- **访客层的精确字节数来自探针，不来自本模块**：`memUsedBytes` 由
+  `app/zsvirt/consolidate.py` 从探针命名空间合并进来，并标注
+  `memUsedBytesOrigin="probe"`。本模块自己**不换算**字节数（D-105）。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.enums import ResourceKind
-from app.graph.repository import upsert_resource
+from app.graph.repository import ensure_edge, upsert_resource
 from app.models import Resource
 from app.normalize.ids import zsvirt_resource_id
 from app.zsvirt import GpuMetricReading
+from app.zsvirt.consolidate import (
+    HarvestPlan,
+    HarvestResult,
+    ResourceUpdate,
+    consolidate_with_probe_gpus,
+    find_probe_gpus,
+    zsvirt_vm_resource_id,
+)
+from app.zsvirt.consolidate import normalize_gpu_identity as _normalize_identity
 
 __all__ = [
     "HarvestPlan",
@@ -66,68 +77,6 @@ __all__ = [
 def zsvirt_host_resource_id(host_uuid: str) -> str:
     """平台宿主资源 ID。"""
     return zsvirt_resource_id(ResourceKind.HOST.value, host_uuid)
-
-
-def zsvirt_vm_resource_id(vm_uuid: str) -> str:
-    """平台虚拟机资源 ID。
-
-    ⚠️ `vm_uuid` 的**获取方式尚未确定**（外部阻塞 X-09）：探针需要知道自己
-    在哪台 VM 里。本函数只负责拼装，不负责获取。
-    """
-    return zsvirt_resource_id(ResourceKind.VM.value, vm_uuid)
-
-
-@dataclass(frozen=True)
-class ResourceUpdate:
-    """一次待落库的资源写入（纯数据，便于测试断言）。"""
-
-    resource_id: str
-    kind: str
-    attributes: dict[str, Any]
-    parent_id: str | None = None
-    name: str | None = None
-
-    def merge_attributes(self, existing: dict[str, Any] | None) -> dict[str, Any]:
-        """与已有属性合并。
-
-        合并而不是覆盖：宿主/GPU 的属性来自多个接口（资产接口写型号容量，
-        指标接口写利用率），互相覆盖会让"上次采到的容量"凭空消失。
-        """
-        merged = dict(existing or {})
-        merged.update(self.attributes)
-        return merged
-
-
-@dataclass
-class HarvestPlan:
-    """一次采集的落库计划。"""
-
-    updates: list[ResourceUpdate] = field(default_factory=list)
-    #: 采集到但**建不出资源**的东西，附原因。必须暴露 —— 见模块文档。
-    unresolved: list[str] = field(default_factory=list)
-    sampled_at: datetime | None = None
-
-    @property
-    def is_empty(self) -> bool:
-        return not self.updates
-
-
-@dataclass
-class HarvestResult:
-    """落库结果。"""
-
-    resources: int = 0
-    created: list[str] = field(default_factory=list)
-    updated: list[str] = field(default_factory=list)
-    unresolved: list[str] = field(default_factory=list)
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "resources": self.resources,
-            "created": self.created,
-            "updated": self.updated,
-            "unresolved": self.unresolved,
-        }
 
 
 def _host_uuid_of(reading: GpuMetricReading) -> str | None:
@@ -229,6 +178,10 @@ def map_reading(
             kind=ResourceKind.GPU.value,
             attributes=attributes,
             parent_id=host_id,
+            # 记录物理标识，供 `consolidate.py` 与探针侧同一张卡对齐。
+            # **必须在这里归一化**：nvidia-smi 写 `00000000:00:08.0`，
+            # ZWatch 写 `0000:00:08.0`，字面比对会认不出是同一张卡。
+            gpu_identity=_normalize_identity(gpu_key),
         )
     )
 
@@ -315,6 +268,12 @@ def persist_plan(
         result.resources += 1
         (result.updated if existed else result.created).append(row.id)
 
+        # 收编子节点（探针命名空间里同一张卡的节点）。必须在父写入**之后**，
+        # 否则外键约束会拒绝 —— 与父资源先写是同一个理由。
+        for child_id in update.child_resource_ids:
+            ensure_edge(session, update.resource_id, child_id, relation="alias")
+            result.reparented.append(child_id)
+
     return result
 
 
@@ -341,4 +300,9 @@ def harvest_once(
         }
 
     plan = map_readings(readings, vm_uuid=vm_uuid, assets=assets)
+
+    # 把探针命名空间里同一张卡的节点收编到平台节点下，并合并访客层测量值
+    # （精确 `memUsedBytes` 只有 VM 内 `nvidia-smi` 能提供 —— 见 D-105）。
+    plan = consolidate_with_probe_gpus(plan, find_probe_gpus(session), include_vm=vm_uuid)
+
     return persist_plan(session, plan, seen_at=seen_at)

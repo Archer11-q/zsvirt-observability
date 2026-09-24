@@ -279,17 +279,26 @@ class TestContainerOom:
 
 
 class TestGpuProbeSymptomOnly:
-    """A 的 `gpu_memory_exhausted.json` 只含 VM 内症状。
+    """A 的 `gpu_memory_exhausted.json` 提供**资源级**访客数据，但不含 `gpu.*` 事件。
 
-    按 D-028 的三层分工，`gpu.memory.exhausted` 由 B 的 GPU 渠道产生，
-    探针只给 `process.io_wait.high`。因此这里断言的是**诚实的行为**：
-    单靠探针症状得不出 GPU 根因（也不该硬套），跨层结论在组合测试里验证。
+    2026-09-23 更新：A 实现了 GPU 直通下的访客层采集（`nvidia-smi` → L3 层），
+    样例里因此多了一个 `gpu` 资源，携带 `memUsedBytes` / `processes[]`。
+    但**事件仍由 B 产生**（D-028 三层分工）：探针只发 `process.io_wait.high`。
+
+    所以这里断言的是**诚实的行为**：单靠探针症状得不出 GPU 根因（也不该硬套）。
+    跨层结论在组合测试里验证。后来者请勿因为看到 GPU 资源就以为症状侧能定因。
     """
 
     def test_accepts_the_batch(self, client: TestClient) -> None:
-        data = post_batch(client, load("gpu_memory_exhausted"))
-        assert data["accepted"]["resources"] == 4
-        assert data["accepted"]["events"] == 2
+        """整批被接受、**零拒收**。资源条数取自样例本身。
+
+        刻意不写死数字：A 为自己的理由给样例加资源，不应让 B 的测试变红；
+        但真正需要守住的"没有条目被拒收"仍然会被守住。
+        """
+        fixture = load("gpu_memory_exhausted")
+        data = post_batch(client, fixture)
+        assert data["accepted"]["resources"] == len(fixture["resources"])
+        assert data["accepted"]["events"] == len(fixture["events"])
         assert data["rejected"] == []
 
     def test_probe_symptom_raises_a_warning_alert(self, client: TestClient) -> None:
@@ -320,8 +329,37 @@ class TestGpuProbeSymptomOnly:
             assert alert["diagnosisId"] is None
             assert alert["evidenceEventIds"], "红线：告警必须有证据"
 
+    def test_probe_supplies_no_gpu_events(self) -> None:
+        """守卫：样例里**没有** `gpu.*` 事件。
+
+        若将来 A 开始发 GPU 事件，这条会失败并提醒更新 D-028 的三层分工 ——
+        而不是让"事件归属"悄悄从 B 漂到 A。
+        """
+        fixture = load("gpu_memory_exhausted")
+        types = {e["type"] for e in fixture["events"]}
+        assert not any(t.startswith("gpu.") for t in types), types
+
+    def test_guest_gpu_resource_carries_byte_level_data(self) -> None:
+        """A 的访客层采集是 D-105 缺口的**唯一**补充来源。
+
+        B 的 ZWatch 渠道拿不到精确字节数（命题方明确使用率 ≠ 字节数），
+        所以 `memUsedBytes` 只能来自 VM 内 `nvidia-smi`。这个字段一旦消失，
+        "显存耗尽"就只剩百分比可依据。
+        """
+        fixture = load("gpu_memory_exhausted")
+        gpus = [r for r in fixture["resources"] if r["kind"] == "gpu"]
+        assert len(gpus) == 1, f"预期一个 GPU 资源，实际 {len(gpus)}"
+        attrs = gpus[0]["attributes"]
+        assert attrs.get("memUsedBytes"), "访客层必须提供精确已用显存字节数"
+        assert attrs.get("memTotalBytes"), "访客层必须提供总容量"
+        assert attrs.get("uuid"), "sourceId 之外的 UUID 也要带上，供跨命名空间对齐"
+
     def test_symptom_alone_does_not_invent_a_gpu_cause(self, client: TestClient) -> None:
-        """不得凭 VM 内 I/O 等待就断言 GPU 显存耗尽 —— 那不叫关联，叫猜。"""
+        """不得凭 VM 内 I/O 等待就断言 GPU 显存耗尽 —— 那不叫关联，叫猜。
+
+        注意样例里**确实有** GPU 资源（访客层），但资源不构成根因证据：
+        结论需要跨层证据链，这正是本项目要证明的能力。
+        """
         post_batch(client, load("gpu_memory_exhausted"))
         diagnoses = client.get("/api/v1/diagnoses").json()["data"]["items"]
         causes = {d["rootCause"] for d in diagnoses}
