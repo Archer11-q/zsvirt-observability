@@ -26,7 +26,7 @@
 > ⚠️ **尚未完成的交付项**：样例容器化 AI 工作负载、真实环境故障注入验证、3–5 分钟
 > 真实环境演示视频。清单与验收标准见
 > **[docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)**；
-> 与命题方的往来问题见 [docs/ZSVIRT_QA_ROUND2.md](docs/ZSVIRT_QA_ROUND2.md)。
+> 尚未关闭的外部阻塞见 [docs/DECISIONS.md](docs/DECISIONS.md) §8（X-ID 清单）。
 
 ## 文档
 
@@ -44,7 +44,6 @@
 | [docs/SENSITIVE_DATA.md](docs/SENSITIVE_DATA.md) | 敏感信息保护：脱敏、字段过滤、访问控制 |
 | [docs/TEST_PLAN.md](docs/TEST_PLAN.md) | 测试分层、三类故障场景与验收闭环 |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | **第三方依赖清单**（赛题交付要求 f） |
-| [docs/ZSVIRT_QA_ROUND2.md](docs/ZSVIRT_QA_ROUND2.md) | 与命题方的技术问答（第二轮，含未关闭的外部阻塞） |
 | [docs/backend/BACKEND_DESIGN.md](docs/backend/BACKEND_DESIGN.md) | 后端模块设计 |
 | [docs/backend/DIAGNOSIS_DESIGN.md](docs/backend/DIAGNOSIS_DESIGN.md) | 诊断引擎与故障场景设计 |
 | [docs/ADR/](docs/ADR/) | 架构决策记录 |
@@ -79,7 +78,7 @@
 | 接口 | 路由后缀 | 未接入原因 |
 |---|---|---|
 | `QueryAlarm` | `/zwatch/alarms` | 返回**告警配置**；平台侧是否需要接入告警规则待与命题方确认 |
-| `GetAlarmData` | `/zwatch/alarm-histories` | 命题方实测「调用成功但**未取得告警记录**」；无真实告警可关联（见 [docs/ZSVIRT_QA_ROUND2.md](docs/ZSVIRT_QA_ROUND2.md) §2） |
+| `GetAlarmData` | `/zwatch/alarm-histories` | 命题方实测「调用成功但**未取得告警记录**」；无真实告警可关联（外部阻塞 **X-11**，见 [docs/DECISIONS.md](docs/DECISIONS.md) §8） |
 | `QueryActiveAlarm` | `/zwatch/activealarms/alarms` | 同上 |
 | `GetEventData` | `/zwatch/events` | 主机事件；作为平台侧信号来源的备选（同上 §2.3） |
 | `QueryEventSubscription` | `/zwatch/events/subscriptions` | 事件订阅配置，本项目用轮询 |

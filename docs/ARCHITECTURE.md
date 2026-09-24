@@ -283,7 +283,7 @@ L5 → L4 → L3 → L2 → L1
 2. ✅ GPU / vGPU 性能指标渠道（R9）—— **已关闭**：ZWatch 已接入（`app/zsvirt/watch.py`）。
 3. 🔴 **当前关键路径**：GPU 直通虚拟机尚未创建（X-13）→ 阻塞样例 AI 负载、真实故障注入
    与演示视频三项交付；**探针 `vmId` 注入方式未定**（X-09）→ 阻塞跨层链的 VM 环节。
-   均见 [`ZSVIRT_QA_ROUND2.md`](ZSVIRT_QA_ROUND2.md)。
+   均见 [`DECISIONS.md`](DECISIONS.md) §8 的外部阻塞清单（X-13 / X-09）。
 3. ✅ ~~A → B 的上报协议~~ → 已全部确认。
 4. ✅ ~~资源 ID 语义~~ → 已确认，`sourceId` 规则由 A 给出（`API_CONTRACT.md` §3.3.1）。
 5. ⚠️ 三类故障场景已按赛题分类对齐，**事件 `type` 枚举仍待三方冻结**（`DATA_MODEL.md` §8）。

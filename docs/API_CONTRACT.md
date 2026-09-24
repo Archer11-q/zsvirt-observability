@@ -471,7 +471,7 @@ POST /api/v1/diagnoses
 
 > **2026-09-23 更新**：命题方已逐条答复，上述问题**不再是硬阻塞**。适配器
 > （`app/zsvirt/watch.py`）按已确认的路由与指标名实现；仍待确认的接口字段名见
-> 第二轮提问 [`ZSVIRT_QA_ROUND2.md`](ZSVIRT_QA_ROUND2.md) §1（外部阻塞 X-12）。
+> 响应字段名仍待命题方提供样例（外部阻塞 **X-12**，见 [`DECISIONS.md`](DECISIONS.md) §8）。
 
 ---
 

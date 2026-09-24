@@ -7,7 +7,7 @@
 
 ## 依据
 
-命题方第一轮答复（`docs/ZSVIRT_QA_ROUND2.md` 引用）确认：
+命题方第一轮答复确认：
 
 - ZWatch 查询能力**已启用在用**，8 个 GET 接口已实测（**关闭外部阻塞 X-07**）；
 - GPU 指标 namespace = `ZStack/Host`，可取 5 个指标：
@@ -36,7 +36,7 @@
 
 第 3 点是有意的取舍：一个"解析不出来就返回空列表"的适配器，在演示现场表现为
 "GPU 指标一直是 —"，而排查方向会被误导到权限或网络。**宁可响一声。**
-第二轮提问（`docs/ZSVIRT_QA_ROUND2.md` §1）已向命题方要响应体样例，
+第二轮提问已向命题方索取响应体样例（外部阻塞 X-12），
 拿到后只需改 `_parse_metric_data`。
 """
 
@@ -229,7 +229,7 @@ def _parse_metric_data(payload: Any) -> list[MetricSample]:
         raise ZWatchSchemaError(
             "GetMetricData 响应里没有 `inventories`；"
             f"实际顶层键：{sorted(root)}。"
-            "适配器的响应形状假设需要按真实样例修正（见 docs/ZSVIRT_QA_ROUND2.md §1）"
+            "适配器的响应形状假设需要按真实样例修正（外部阻塞 X-12）"
         )
     if not isinstance(inventories, list):
         raise ZWatchSchemaError(f"`inventories` 应为列表，实际是 {type(inventories).__name__}")

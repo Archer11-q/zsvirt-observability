@@ -199,7 +199,7 @@ def map_reading(
     else:
         plan.unresolved.append(
             "未提供 ZSvirt VM UUID，未建立 vm 资源：探针 vmId 的获取方式仍未确定"
-            "（外部阻塞 X-09，见 docs/ZSVIRT_QA_ROUND2.md §5.2）"
+            "（外部阻塞 X-09，见 docs/DECISIONS.md §8）"
         )
 
     return plan
