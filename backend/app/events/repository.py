@@ -28,6 +28,7 @@ C 要求"轮询接口必须幂等 + 游标分页稳定，避免重复/漏数据"
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from sqlalchemy import Select, and_, func, or_, select
@@ -35,6 +36,42 @@ from sqlalchemy.orm import Session
 
 from app.enums import SEVERITY_RANK
 from app.models import Event
+
+
+@dataclass(frozen=True)
+class MetricPoint:
+    """一个指标数据点。"""
+
+    at: datetime
+    value: float
+
+
+@dataclass
+class MetricPointSeries:
+    """一个 `(resourceId, name)` 的点序列。"""
+
+    resource_id: str
+    name: str
+    points: list[MetricPoint] = field(default_factory=list)
+    #: 因点数上限被裁剪（裁剪时保留最新）。
+    truncated: bool = False
+    #: 事件契约不携带单位，因此恒为 None —— 见 `app/api/metrics.py`。
+    unit: str | None = None
+
+
+@dataclass
+class MetricSeriesResult:
+    """序列集合 + 扫描情况。"""
+
+    series: list[MetricPointSeries]
+    events_scanned: int
+    #: 扫描在上限处被截断 ⇒ 曲线可能不完整。**必须让调用方看见。**
+    scan_truncated: bool
+
+
+def _is_numeric(value: object) -> bool:
+    """布尔不算数值（理由见 `query_metric_series` 的文档字符串）。"""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _apply_filters(
@@ -181,7 +218,82 @@ def latest_event_at(session: Session) -> datetime | None:
     return session.execute(select(func.max(Event.occurred_at))).scalar()
 
 
+def query_metric_series(
+    session: Session,
+    *,
+    scan_limit: int,
+    points_per_series: int,
+    occurred_from: datetime | None = None,
+    occurred_to: datetime | None = None,
+    resource_ids: Sequence[str] | None = None,
+    names: Sequence[str] | None = None,
+) -> MetricSeriesResult:
+    """把事件里的 `metrics` 字典摊平成 `(resourceId, name)` 点序列。
+
+    **为什么在 Python 里摊平而不是在 SQL 里**：`Event.metrics` 是
+    `{名称: 数值}` 的自由结构，SQL 侧 unnest 需要**事先知道指标名** ——
+    而"环境里有哪些指标"正是本接口要回答的问题。扫描一段有界窗口（已按时间
+    排序）再摊平更简单，也不假装自己是查询规划器。
+
+    布尔不算数值：Python 里 `isinstance(True, int)` 为真，不显式排除的话
+    `{"oomKilled": true}` 会变成一条 "oomKilled = 1.0" 的曲线 ——
+    一个看起来像指标、其实只是标志位的东西。
+    """
+    stmt = select(Event)
+    if occurred_from is not None:
+        stmt = stmt.where(Event.occurred_at >= occurred_from)
+    if occurred_to is not None:
+        stmt = stmt.where(Event.occurred_at <= occurred_to)
+    if resource_ids:
+        stmt = stmt.where(Event.resource_id.in_(list(resource_ids)))
+    # 升序：点按时间追加即为升序，曲线从左到右
+    stmt = stmt.order_by(Event.occurred_at.asc(), Event.id.asc())
+
+    # 多取一条判断是否被截断，避免额外一次 count
+    rows = list(session.execute(stmt.limit(scan_limit + 1)).scalars())
+    scan_truncated = len(rows) > scan_limit
+    rows = rows[:scan_limit]
+
+    wanted = {n for n in (names or []) if n}
+    buckets: dict[tuple[str, str], MetricPointSeries] = {}
+
+    for event in rows:
+        payload = event.metrics or {}
+        if not isinstance(payload, dict):
+            # 脏数据不该让整个端点 500 —— 跳过并继续，其它事件仍然可用。
+            continue
+        for raw_name, raw_value in payload.items():
+            if not isinstance(raw_name, str) or not raw_name:
+                continue
+            if wanted and raw_name not in wanted:
+                continue
+            if not _is_numeric(raw_value):
+                continue
+            key = (event.resource_id, raw_name)
+            bucket = buckets.get(key)
+            if bucket is None:
+                bucket = MetricPointSeries(resource_id=event.resource_id, name=raw_name)
+                buckets[key] = bucket
+            bucket.points.append(MetricPoint(at=event.occurred_at, value=float(raw_value)))
+
+    for bucket in buckets.values():
+        if points_per_series > 0 and len(bucket.points) > points_per_series:
+            # 保留**最新**的点：曲线右侧（当前状态）比左侧更值得看，
+            # 而 sparkline 也只有几百像素宽。
+            bucket.points = bucket.points[-points_per_series:]
+            bucket.truncated = True
+
+    return MetricSeriesResult(
+        series=sorted(buckets.values(), key=lambda b: (b.name, b.resource_id)),
+        events_scanned=len(rows),
+        scan_truncated=scan_truncated,
+    )
+
+
 __all__ = [
+    "MetricPoint",
+    "MetricPointSeries",
+    "MetricSeriesResult",
     "count_events",
     "get_events_by_ids",
     "latest_event_at",

@@ -19,7 +19,7 @@ from app.api import alerts as alerts_module
 from app.api import diagnoses as diagnoses_module
 from app.api import dict as dict_module
 from app.api import events as events_module
-from app.api import health, ingest, topology
+from app.api import health, ingest, metrics, topology
 from app.api import workloads as workloads_module
 
 api_router = APIRouter()
@@ -32,6 +32,8 @@ api_router.include_router(events_module.router)
 # 不存在 shadowing 风险；先详情后集合只是保持"详情的依赖更基础"的阅读顺序
 api_router.include_router(diagnoses_module.router)
 api_router.include_router(ingest.router)
+# metrics：事件内指标的时间序列（只读聚合，见 app/api/metrics.py 的边界说明）
+api_router.include_router(metrics.router)
 api_router.include_router(topology.router)
 api_router.include_router(workloads_module.router)
 api_router.include_router(dict_module.router)
