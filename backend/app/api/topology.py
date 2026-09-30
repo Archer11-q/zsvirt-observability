@@ -138,17 +138,32 @@ def _parse_kinds(kinds: str | None) -> list[str] | None | _Invalid:
     return parts
 
 
+#: 距上次观测多久开始报 `staleness`。低于它保持 `None`。
+#:
+#: 300 秒的理由：轮询类采集（探针 10s、平台同步 30s）正常运行时年龄是秒级；
+#: 超过 5 分钟已经不是抖动。而"0s 前"这类噪声才是原实现要避免的东西 ——
+#: 所以这里去掉的是噪声，不是信息。
+TOPOLOGY_STALENESS_WARN_SEC = 300
+
+
 def _to_node(resource: Any, now: datetime) -> TopologyNode:
     """ORM 资源 → 拓扑节点。
 
-    `staleness` 只在非 active 时给出 —— 正常资源不需要前端显示"0s 前"，
-    给了反而让界面噪声变大。
-    """
-    from app.enums import Observability
+    **`staleness` 与 `observability` 解耦。** 早先只在 `observability != active`
+    时给出它，理由是"正常资源不必显示 0s 前"。但后台陈旧标记默认关闭（演示数据
+    时间基准固定在过去，开启会全体变 stale），于是 `observability` 永远是
+    `active`、`staleness` **永远是空** —— 一个契约承诺给前端的字段永久为空。
 
-    staleness = None
-    if resource.observability != Observability.ACTIVE.value:
-        staleness = format_staleness(resource.last_seen_at, now)
+    更要紧的是耦合本身就不对：「多久没听到这个资源的心跳」是一个**关于时间的事实**，
+    不是判决。挂在判决上会让界面在越过阈值**之前**无法预警，也无法显示年龄。
+
+    现在的规则：年龄超过 `TOPOLOGY_STALENESS_WARN_SEC` 就给出，与
+    `observability` 无关；低于阈值仍为 `None`（保留原来去噪声的意图）。
+    `isStale` 另给一个布尔，免得前端去解析 `"13d"` 这种字符串来判断是否高亮。
+    """
+    age_seconds = max(0, int((now - resource.last_seen_at).total_seconds()))
+    over_threshold = age_seconds >= TOPOLOGY_STALENESS_WARN_SEC
+    staleness = format_staleness(resource.last_seen_at, now) if over_threshold else None
 
     return TopologyNode(
         id=resource.id,
@@ -158,6 +173,8 @@ def _to_node(resource: Any, now: datetime) -> TopologyNode:
         status=resource.status,
         observability=resource.observability,
         staleness=staleness,
+        #: 是否需要前端提示"数据陈旧"。布尔而不是让前端比字符串。
+        isStale=over_threshold,
         lastSeenAt=resource.last_seen_at.isoformat(),
         isPlaceholder=resource.is_placeholder,
         attributes=resource.attributes or {},

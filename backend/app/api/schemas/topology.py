@@ -33,6 +33,8 @@ class TopologyNode(BaseModel):
     observability: str
     #: 距上次观测的时长（如 "10m"），供前端提示"数据陈旧"
     staleness: str | None = None
+    #: 是否需要提示"数据陈旧"（年龄超阈值）。给布尔而不是让前端解析 `"13d"`。
+    isStale: bool = False
 
     lastSeenAt: str
     #: 占位节点标记（事件引用未上报资源时创建）

@@ -187,20 +187,139 @@ class TestStatusVsObservability:
         assert vm["observability"] == "stale", "观测状态独立变化"
         assert vm["status"] != "stale", "stale 绝不能出现在 status 里"
 
-    def test_staleness_only_present_when_not_active(
+    def test_fresh_resources_report_no_staleness(
         self, client: TestClient, db_session: Session
     ) -> None:
-        """正常资源不显示 staleness —— 否则界面全是"0s 前"的噪声。"""
-        build_chain(db_session)
-        db_session.commit()
-        nodes = client.get("/api/v1/topology", params={"rootId": HOST}).json()["data"]["nodes"]
-        assert all(n["staleness"] is None for n in nodes)
+        """刚观测过的资源不显示 staleness —— 否则界面全是"0s 前"的噪声。
 
-        mark_stale(db_session, older_than_seconds=60, now=NOW + timedelta(minutes=10))
+        保留原实现的（正当）意图：去掉噪声，不是去掉信息。
+        **必须用真实的当前时间**：夹具的 `NOW` 是固定过去时刻，它建出来的资源
+        按墙钟算是"25 天前"，那本来就应该报陈旧。
+        """
+        from datetime import UTC, datetime
+
+        build_chain(db_session, seen_at=datetime.now(UTC))
         db_session.commit()
+
         nodes = client.get("/api/v1/topology", params={"rootId": HOST}).json()["data"]["nodes"]
+        assert all(n["staleness"] is None for n in nodes), "刚观测过的资源不该显示年龄 —— 那是噪声"
+        assert all(n["isStale"] is False for n in nodes)
+
+    def test_staleness_reflects_age_not_the_observability_verdict(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """**回归点**：`staleness` 是关于时间的事实，不是判决。
+
+        它曾被挂在 `observability != active` 上，于是当后台陈旧标记默认关闭时
+        （演示数据时间基准固定在过去，开启会全体变 stale），这个字段**永远是空** ——
+        契约承诺给前端的字段永久为空。
+
+        做法：把资源的 `last_seen_at` 推旧，**不调用 `mark_stale`**，
+        于是 `observability` 保持 `active`。此时年龄事实仍必须被报出。
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import update
+
+        from app.models import Resource
+
+        build_chain(db_session, seen_at=datetime.now(UTC))
+        db_session.commit()
+        db_session.execute(
+            update(Resource).values(last_seen_at=datetime.now(UTC) - timedelta(days=13))
+        )
+        db_session.commit()
+
+        nodes = client.get("/api/v1/topology", params={"rootId": HOST}).json()["data"]["nodes"]
+        assert all(n["observability"] == "active" for n in nodes), (
+            "本用例的前提是 observability 保持 active"
+        )
+        assert all(n["isStale"] is True for n in nodes), (
+            "年龄已超阈值，isStale 必须为真 —— 即使 observability 还是 active"
+        )
         assert all(n["staleness"] is not None for n in nodes)
-        assert nodes[0]["staleness"].endswith(("s", "m", "h", "d"))
+        # 断言格式而不是精确天数：天数会随墙钟漂移，格式不会
+        assert all(n["staleness"].endswith("d") for n in nodes)
+
+    def test_is_stale_is_a_boolean_for_the_frontend(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """给布尔而不是让前端解析 `"13d"` 来判断是否高亮 —— 比字符串是易碎逻辑。"""
+        from datetime import UTC, datetime, timedelta
+
+        from app.models import Resource
+
+        build_chain(db_session, seen_at=datetime.now(UTC))
+        db_session.commit()
+        resource = db_session.get(Resource, HOST)
+        resource.last_seen_at = datetime.now(UTC) - timedelta(days=13)
+        db_session.commit()
+
+        nodes = client.get("/api/v1/topology", params={"rootId": HOST}).json()["data"]["nodes"]
+        host = next(n for n in nodes if n["id"] == HOST)
+        assert host["isStale"] is True
+        assert host["staleness"].endswith("d")
+        # 关键：observability 仍是 active，但年龄事实被如实报出
+        assert host["observability"] == "active"
+
+    def test_marker_sets_observability_and_age_sets_staleness(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """两件事**各归各**：标记器负责 `observability`，年龄负责 `staleness`。
+
+        这正是解耦的意义。早先 `staleness` 挂在 `observability` 上，于是
+        "标记器没跑"就等于"永远不显示年龄"；现在两者独立，各自可验证。
+
+        这里把 `last_seen_at` 推旧**并**调用标记器，于是两个事实同时成立：
+        年龄够大 ⇒ `staleness` 有值；标记器跑过 ⇒ `observability == stale`。
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import update
+
+        from app.models import Resource
+
+        build_chain(db_session, seen_at=datetime.now(UTC) - timedelta(hours=2))
+        db_session.commit()
+
+        marked = mark_stale(db_session, older_than_seconds=60, now=datetime.now(UTC))
+        db_session.commit()
+        assert marked == 6, f"标记器应影响全部 6 个资源，实际 {marked}"
+
+        nodes = client.get("/api/v1/topology", params={"rootId": HOST}).json()["data"]["nodes"]
+        assert all(n["observability"] == "stale" for n in nodes), "标记器没有生效"
+        assert all(n["isStale"] is True for n in nodes)
+        assert all(n["staleness"] is not None for n in nodes)
+        del update, Resource
+
+    def test_staleness_is_independent_of_the_observability_verdict(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """**解耦的直接证据**：`observability` 还是 `active`，年龄照样报出来。
+
+        这是本组里最重要的一条 —— 它保证了字段不会因为后台标记器被关掉
+        （演示环境的默认）而永久为空。
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import update
+
+        from app.models import Resource
+
+        build_chain(db_session, seen_at=datetime.now(UTC))
+        db_session.commit()
+        # 只推旧时间，**不调用 mark_stale**
+        db_session.execute(
+            update(Resource).values(last_seen_at=datetime.now(UTC) - timedelta(days=13))
+        )
+        db_session.commit()
+
+        nodes = client.get("/api/v1/topology", params={"rootId": HOST}).json()["data"]["nodes"]
+        assert all(n["observability"] == "active" for n in nodes), (
+            "本用例的前提：标记器未运行，observability 保持 active"
+        )
+        assert all(n["isStale"] is True for n in nodes), "年龄超阈值就必须报陈旧 —— 不能等标记器"
+        assert all(n["staleness"].endswith("d") for n in nodes)
 
     def test_gone_excluded_by_default(self, client: TestClient, db_session: Session) -> None:
         build_chain(db_session)
