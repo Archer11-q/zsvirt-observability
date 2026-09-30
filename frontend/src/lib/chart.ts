@@ -68,3 +68,17 @@ export const CHART_STYLE = {
     textStyle: { color: '#F1F5F9', fontSize: 13, fontFamily: FONT_SANS },
   },
 } as const
+
+/** 迷你曲线（诊断证据里的 sparkline，契约 §4.11）。
+ *
+ * 尺寸很小，因此刻意去掉坐标轴、网格与图例：它只用来看**形状** ——
+ * 阶跃（配置变更）还是缓升（资源耗尽）。数值由它旁边的证据文本给出，
+ * 曲线本身不承担读数职责，所以也不需要刻度。
+ */
+export const SPARKLINE = {
+  width: 132,
+  height: 32,
+  color: CHART_PALETTE[3],
+  lineWidth: 1.5,
+  grid: { left: 2, right: 2, top: 4, bottom: 4 },
+} as const
