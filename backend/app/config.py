@@ -4,6 +4,7 @@
 凭据一律从环境变量注入，仓库内只保留 .env.example。
 """
 
+from datetime import timedelta
 from functools import lru_cache
 from typing import Literal
 
@@ -68,9 +69,29 @@ class Settings(BaseSettings):
 
     # --- 诊断 ---
     diag_window_tolerance_sec: int = Field(default=30, alias="DIAG_WINDOW_TOLERANCE_SEC")
+    #: 告警自动恢复窗口（D-084）。超过它没有新证据的告警转 `resolved`。
+    alert_recovery_after_sec: int = Field(default=600, alias="ALERT_RECOVERY_AFTER_SEC")
+
+    # --- 后台周期任务（见 app/scheduler.py）---
+    #: 总开关。本地演示或只想手动触发时关掉，避免后台悄悄改库。
+    scheduler_enabled: bool = Field(default=True, alias="SCHEDULER_ENABLED")
+    scheduler_interval_sec: int = Field(default=60, alias="SCHEDULER_INTERVAL_SEC")
+    #: 资源多久没心跳标 `stale`。**为 0 表示关闭该步**。
+    #:
+    #: 默认关闭（0）是有意的：`app.demo` 的演示数据时间基准是固定的过去时刻
+    #: （2026-09-17），开启后全部资源会立刻变成 `stale`/`gone` —— 语义上正确，
+    #: 但演示画面上会一片离线符号。等准备演示时再按当时的策略打开。
+    #: 真实部署应当设成有意义的值（例如 300 / 3600）。
+    resource_stale_after_sec: int = Field(default=0, alias="RESOURCE_STALE_AFTER_SEC")
+    resource_gone_after_sec: int = Field(default=0, alias="RESOURCE_GONE_AFTER_SEC")
 
     # --- 敏感信息 ---
     sensitive_filter_enabled: bool = Field(default=True, alias="SENSITIVE_FILTER_ENABLED")
+
+    @property
+    def alert_recovery_after(self) -> timedelta:
+        """告警自动恢复窗口（`timedelta` 形式，供 `reconcile_all` 使用）。"""
+        return timedelta(seconds=self.alert_recovery_after_sec)
 
     @property
     def auth_enabled(self) -> bool:

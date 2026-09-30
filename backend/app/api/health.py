@@ -74,6 +74,38 @@ def probe_database(url: str) -> ComponentStatus:
         )
 
 
+def probe_scheduler() -> ComponentStatus:
+    """后台周期任务状态。
+
+    **放进 `/api/health` 的理由**：这些任务负责"告警自动恢复"与"资源陈旧标记"。
+    它们不跑，系统表面上看不出异常 —— 告警永远停在 `firing`、资源永远是 `active`，
+    而页面一切正常。那正是最难发现的一类故障，必须有一个可见处。
+
+    调度器被配置关闭时返回 `ok` + `disabled`（那是**选择**，不是故障）。
+    任务连续失败时返回 `degraded` —— 它意味着自愈能力已经失效。
+    """
+    from app.main import runtime_tasks
+
+    if runtime_tasks is None:
+        return ComponentStatus(
+            status="ok",
+            detail={"enabled": False, "note": "周期任务未启用（SCHEDULER_ENABLED=false）"},
+        )
+
+    states = runtime_tasks.states
+    failures = sum(int(s["failures"]) for s in states.values())
+    detail: dict = {
+        "enabled": True,
+        "intervalSec": runtime_tasks.interval_sec,
+        "tasks": states,
+    }
+    if failures:
+        detail["error"] = "SCHEDULER_TASK_FAILED"
+        detail["note"] = "周期任务存在失败：告警自动恢复或资源陈旧标记可能已失效"
+        return ComponentStatus(status="degraded", detail=detail)
+    return ComponentStatus(status="ok", detail=detail)
+
+
 def probe_gpu_provider(settings: object) -> ComponentStatus:
     """真实探活 GPU 数据渠道。
 
@@ -153,6 +185,7 @@ def health() -> HealthResponse:
         ),
         "ingest": ComponentStatus(status=ingest_status, detail=ingest_detail),
         "gpuProvider": probe_gpu_provider(settings),
+        "scheduler": probe_scheduler(),
     }
 
     return HealthResponse(

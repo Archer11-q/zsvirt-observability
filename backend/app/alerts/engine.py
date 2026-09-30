@@ -471,6 +471,7 @@ def reconcile_all(
     *,
     rule_set: RuleSet | None = None,
     now: datetime | None = None,
+    recovery_after: timedelta | None = None,
 ) -> dict[str, Any]:
     """依次完成"静默到期释放"与"条件解除恢复"，返回**两个独立的**摘要。
 
@@ -486,6 +487,10 @@ def reconcile_all(
     而被判为已恢复 —— 那等于把静默偷偷变成自动关单，而运维静默的意图往往是
     "我在处理，先别叫我"。
 
+    `recovery_after` 透传给 `reconcile`；不传则用规则集上的默认值（D-084 的
+    10 分钟）。**后台任务必须把配置值传进来**，否则 `ALERT_RECOVERY_AFTER_SEC`
+    这个配置项是死的。
+
     返回 `{"released": [...], "recovery": {...}}`。
     """
     moment = now or datetime.now(UTC)
@@ -498,7 +503,7 @@ def reconcile_all(
     if released:
         session.flush()
 
-    recovered = reconcile(session, rule_set=rule_set, now=moment)
+    recovered = reconcile(session, rule_set=rule_set, now=moment, recovery_after=recovery_after)
     return {"released": released, "recovery": recovered.as_dict()}
 
 
