@@ -162,6 +162,13 @@ class WorkloadData(BaseModel):
     #: 关联诊断（取该服务最近一次）
     diagnosisId: str | None = None
     rootCause: str | None = None
+    #: `rootCause` 的归属范围：`own` = 证据点名了本服务或其自有资源（"这就是你的故障"）；
+    #: `shared` = 证据只落在**共享基础设施**（VM / vGPU / GPU / 宿主）上，
+    #: 本服务受影响但根因不是它自己的。
+    #:
+    #: **前端必须用不同视觉呈现这两者。** 否则"你的容器 OOM 了"与"你所在的 GPU 卡满了"
+    #: 长得一模一样，而它们的处置方式完全不同。
+    rootCauseScope: str | None = None
 
     #: 底层资源链的 ID（供前端点进拓扑下钻）
     parentId: str | None = None

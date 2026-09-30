@@ -114,7 +114,10 @@ def list_workloads(
             event_count=event_counts.get(w.id, 0),
             alert_count=alert_counts.get(w.id, 0),
             firing_count=firing_counts.get(w.id, 0),
-            diagnosis=diagnoses.get(w.id),
+            diagnosis=_row_of(diagnoses.get(w.id)),
+            # rank 0/1 = "你自己的故障"；2 = "共享基础设施有问题"。
+            # 两者都要暴露，否则界面上无法区分。
+            root_cause_scope=_scope_for(diagnoses.get(w.id)),
             usage=gpu_usage.get(w.id),
         )
         for w in workloads
@@ -352,6 +355,29 @@ def _first_float(attrs: dict[str, Any], *keys: str) -> float | None:
     return None
 
 
+def _scope_for(entry: Any) -> str | None:
+    """`latest_diagnoses_per_owner` 的返回值 → 归属范围字符串。
+
+    该函数返回 `(row, rank)`；本适配器让 `_to_workload` 仍然只看 `row`，
+    归属范围单独传递 —— 两件事分开，读代码时不必记住元组位置。
+    """
+    if entry is None:
+        return None
+    if isinstance(entry, tuple):
+        _row, rank = entry
+        return "own" if rank <= 1 else "shared"
+    # 兼容非元组（例如测试里直接塞一行）—— 视为"自己的故障"，
+    # 因为那种用法本来就是"给它一条诊断"。
+    return "own"
+
+
+def _row_of(entry: Any) -> Any:
+    """从 `(row, rank)` 里取出诊断行。"""
+    if entry is None:
+        return None
+    return entry[0] if isinstance(entry, tuple) else entry
+
+
 def _to_workload(
     resource: Resource,
     *,
@@ -361,6 +387,7 @@ def _to_workload(
     firing_count: int,
     diagnosis: Any,
     usage: WorkloadResourceUsage | None,
+    root_cause_scope: str | None = None,
 ) -> WorkloadData:
     """ORM 资源 → 工作负载视图。
 
@@ -384,6 +411,7 @@ def _to_workload(
         firingAlertCount=firing_count,
         diagnosisId=diagnosis.id if diagnosis is not None else None,
         rootCause=diagnosis.root_cause if diagnosis is not None else None,
+        rootCauseScope=root_cause_scope,
         parentId=resource.parent_id,
     )
 

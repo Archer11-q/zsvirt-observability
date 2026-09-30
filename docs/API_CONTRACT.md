@@ -321,6 +321,7 @@ C 指出 `DATA_MODEL.md` §4.1 的 `status` 与 §7 生命周期是两套词汇�
 | `alertCount` / `eventCount` | 关联告警 / 事件计数 |
 | `firingAlertCount` | 其中仍处于 `firing` 的告警数 |
 | `rootCause` | 关联诊断的根因码（若有） |
+| `rootCauseScope` | `own` \| `shared` \| `null` —— 见下 |
 | `diagnosisId` | 关联诊断（若有，否则 `null`） |
 | `parentId` | 所属容器 / VM（若有） |
 
@@ -332,6 +333,25 @@ C 指出 `DATA_MODEL.md` §4.1 的 `status` 与 §7 生命周期是两套词汇�
 | `gpuProviderMode` | string | 当前 GPU 数据渠道（`zsvirt-zwatch` / `guest-smi` / `simulated` / `auto`） |
 | `windowFrom` | string | **事件 / 告警计数的统计窗口起点**（UTC ISO8601） |
 | `windowTo` | string | 统计窗口终点 |
+
+**`rootCauseScope` 的语义（2026-09-30 新增）**：它回答"这条根因是不是**这个工作负载自己**的问题"。
+
+| 取值 | 含义 | 建议呈现 |
+|---|---|---|
+| `own` | 证据点名了它自身，或它**拥有**的资源（容器 / 进程 / 它自己的 Agent） | 正常强调色 —— "这是你的故障" |
+| `shared` | 证据只落在**共享基础设施**（宿主 / GPU / vGPU / VM）上，它只是坐在上面 | **弱化 + 注明"共享基础设施"** —— "你所在的机器/卡有问题" |
+| `null` | 无归属（结构不相关，或该诊断没有证据） | 不显示根因 |
+
+**为什么必须区分**：一张 GPU 卡满时，卡上每个工作负载都受影响，但**没有一个是"自己配错了"**。
+不区分的话，界面会把共享基础设施的故障显示成每个服务自己的故障 —— 运维会去改一个没问题的服务。
+实测（全 5 场景）：健康场景曾显示 `GPU_MEMORY_EXHAUSTED`，与真正的"容器 OOM"在列里长得一模一样。
+
+**置信度与归属判定点**（供排障参考，实现见 `app/diagnosis/service.py::latest_diagnoses_per_owner`）：
+
+- 归属**要求该诊断有证据**（无证据的诊断不参与归属 —— 与"无证据不得给根因"同一红线）；
+- 证据落在**共享基础设施的哪一种类型**上决定 `own` / `shared`：`host` / `gpu` / `vgpu` / `vm`
+  视为共享，其余视为工作负载自有；
+- `potentially_affected` **不参与**归属判定 —— 那一档按定义就是"无证据"。
 
 > **`windowFrom` / `windowTo` 必须展示给用户。** 计数是按这个窗口算的（默认近 24 小时），
 > 而窗口在界面上不可见时会出现自相矛盾的现象：某个工作负载 `eventCount: 0`、
@@ -652,5 +672,6 @@ POST /api/v1/diagnoses
 |---|---|---|---|
 | v0.1 | 2026-09-16 | 首轮草案：通用约定、A→B 上报契约、B→C 查询契约、ZSvirt 适配待确认项 | DRAFT，待三方评审 |
 | v0.2 | 2026-09-16 | **Q1–Q7 全部关闭**（采纳成员 A 答复）：至少一次投递、`batchId` 幂等、5s/1MB 批量上限、env 配置、断网缓冲、可选 token；响应体新增 `resources[]` 逐条结果、`duplicate`、`serverTime`；新增 `sourceId` 生成规则 | 已确认 |
+| v0.5 | 2026-09-30 | §4.3 新增 `rootCauseScope`（`own` / `shared`）并写明「共享基础设施的故障不得显示成每个工作负载自己的故障」及其理由；澄清归属判定以**证据所在资源的类型**为准，`potentially_affected` 不参与 | 已确认 |
 | v0.4 | 2026-09-30 | **补记三处契约变化**（B 侧实现先行、契约后补，见下）：① 新增 `GET /api/v1/metrics`（事件内指标时间序列，不引入 TSDB）；② 新增 `POST /api/v1/diagnoses/{id}/ticket`（工单文本，只读）；③ `TopologyNode` 新增 `isStale`，并**修正 `staleness` 与 `observability` 的耦合**（原先只在非 active 时给出 ⇒ 后台标记默认关闭时该字段永久为空）；④ §4.3 补记 `WorkloadListData` 顶层 `gpuProviderMode` / `windowFrom` / `windowTo`（早已在返回，契约漏写）；⑤ 明确新字段在前端**一律声明为必需** | 已确认 |
 | v0.3 | 2026-09-17 | **Q8–Q14 全部关闭**（采纳成员 C 评审）：采纳 `/v1` 前缀、`/workloads` 定为 `ai_service` 聚合、首版纯轮询、拓扑上限 200/400、**新增 `POST`/`GET /api/v1/diagnoses` 与 `GET /api/v1/dict`**；修正 `status` 与观测状态字段歧义（§4.2.1）；`/api/health` 增补时钟漂移与 GPU provider 模式 | 已确认 |

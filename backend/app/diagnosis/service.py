@@ -538,9 +538,27 @@ def root_cause_counts(session: Session, *, created_from: datetime | None = None)
     return {str(rc): int(n) for rc, n in rows}
 
 
+#: 共享基础设施的资源类型。这些类型上出的问题影响**坐在它们上面的全部工作负载**，
+#: 而不是某一个。取自 `DATA_MODEL.md` §2.2 的链路
+#: （宿主机 → GPU/vGPU → VM → 容器/进程 → AI 服务）。
+#:
+#: 新增类型时**默认不在此列**（即视为工作负载自有）—— 宁可把"共享"判成"自有"，
+#: 也不要把真实的自身故障悄悄降级成"共享基础设施问题"。
+SHARED_INFRA_KINDS: frozenset[str] = frozenset({"host", "gpu", "vgpu", "vm"})
+
+
+def _shared_infra_ids(resource_ids: set[str]) -> set[str]:
+    """从一组资源 ID 里挑出属于共享基础设施的那些。"""
+    return {
+        resource_id
+        for resource_id in resource_ids
+        if resource_id.split(":", 1)[0] in SHARED_INFRA_KINDS
+    }
+
+
 def latest_diagnoses_per_owner(
     session: Session, owners: dict[str, list[str]]
-) -> dict[str, DiagnosisRow]:
+) -> dict[str, tuple[DiagnosisRow, int]]:
     """按"归属关系"取每个工作负载最近一次诊断。
 
     `owners` 是 `资源 ID → 拥有它的工作负载 ID 列表` 的映射（由
@@ -553,7 +571,20 @@ def latest_diagnoses_per_owner(
       **受影响的那一方**。若只认"诊断提到了工作负载 ID"，链路下层的诊断在
       业务视图里就全部不可见，工作负载总览也就失去了意义。
 
-    实现：一次按 `created_at DESC` 的扫描，内存里对每个工作负载只保留第一条。
+    **证据是归属的前提。** `_rank` 早先把 `potentially_affected` 也算作"贴近"，
+    而那一档按定义就是"结构可达但**无证据**"。后果是可达性被当成了证据：一条证据
+    全在 A 工作负载平面上的诊断，会因为共享祖先而对 B、C、D 同样"贴近"，并列时按
+    `-created_at` 任意择一 —— 实测 `demo-svc-healthy`（健康场景）被挂上了
+    `GPU_MEMORY_EXHAUSTED`，而"自己超配 vs 邻居干扰"这两个本该区分的场景在同一列里
+    长得一模一样。
+
+    现在：**没有任何相关证据的诊断不参与归属**（与诊断引擎自身的红线一致 ——
+    无证据不得给根因）。可达但无证据 ⇒ 不归属，而不是勉强归属。
+
+    返回 `{owner: (row, rank)}`，`rank` 让调用方区分"这就是你的故障"（0/1）与
+    "你所在的共享基础设施有问题"（2）。**这两种不该在界面上长得一样。**
+
+    实现：一次按 `created_at DESC` 的扫描，内存里对每个工作负载只保留最优的一条。
     诊断表规模（演示与比赛量级）下完全够用，也不需要窗口函数。
     """
     if not owners:
@@ -572,45 +603,117 @@ def latest_diagnoses_per_owner(
 
     wanted_owners = {owner for resource_owners in owners.values() for owner in resource_owners}
 
-    # 每个工作负载"自己的平面"= 它自身 + 它的**后代**（不含共享祖先）。
-    #
-    # 必须是后代而不只是自身节点：容器上的结论点名的是容器，那正是该工作负载自己的
-    # 事。而 VM / vGPU 是所有工作负载共享的基础设施，共享层上的结论不属于任何单个
-    # 工作负载 —— 把它当"点名了自己"会让每张卡片显示同一条结论（实测）。
-    #
-    # 用 `_directed_walk`（与 `resource_scope_for` 同一实现）而不是另算一套：
-    # "哪些资源属于这个工作负载"只应有一个定义点。
-    own_plane: dict[str, set[str]] = {
-        owner: _directed_walk(session, owner)[0] for owner in wanted_owners
+    # 注：这里**不再**计算 `own_plane`（自身 + 后代）与 `shared_infra`。
+    # 归属所需的两个方向分别由下面的 `owns`（拥有，向下）与 `reachable`
+    # （依赖，向上+向下）回答；早先的 own_plane 只有"自身 + 后代"这一个方向，
+    # 无法回答"容器上的证据是否属于这个工作负载"（容器是它的祖先）。
+
+    # 注：这里**不需要** `owns`（自身 + 后代）。归属用 `owners`（资源 → 归属它的
+    # 工作负载，沿父链向上）来判"谁拥有它" —— 这是唯一能同时正确涵盖"我自己的容器"
+    # 与"共享的 vGPU"的方向；而"是不是共享层"由资源类型回答（见 `shared_infra`）。
+    # 三个方案各错一次的经过记在 `_rank` 的文档字符串里。
+
+    #: 本次候选资源里属于共享基础设施的那些（宿主 / GPU / vGPU / VM）。
+    #: 共享与否是**资源类型**的性质：这些层是多个工作负载共同坐在上面的。
+    shared_infra: set[str] = _shared_infra_ids(set(all_resources))
+
+    #: 工作负载**依赖**的资源（自身 + 祖先 + 后代）。用于回答"它是否受影响"。
+    #: 两个方向分开，是因为它们回答两个不同的问题 —— 混用会把共享基础设施上的
+    #: 故障误报成每个工作负载的自身故障（实测）。
+    reachable: dict[str, set[str]] = {
+        owner: resource_scope_for(session, owner) for owner in wanted_owners
     }
 
     rows = list(session.execute(stmt).scalars())
 
-    def _rank(row: DiagnosisRow, owner: str) -> int:
-        """这条结论对该工作负载的"贴近程度"，越小越贴近。"""
-        direct: set[str] = set(row.affected_resources or ())
-        direct.update(row.on_chain or ())
-        touched: set[str] = direct | set(row.potentially_affected or ())
+    #: 结论真正依赖的资源。**这才是"是不是自己的故障"的判据**，而不是 `affected`。
+    #:
+    #: 实测过两次教训：`affected_resources` 是**影响闭包**，会沿链向下把每个工作负载
+    #: 自己的容器 / Agent / AI 服务都收进来。拿它判归属，会让同一块卡上的**全部**
+    #: 工作负载（含健康场景）都被标成"自身故障"。结论依据的是 `evidence`，归属也应当看它。
+    def _evidence_ids(row: DiagnosisRow) -> set[str]:
+        return {str(item["resourceId"]) for item in (row.evidence or []) if item.get("resourceId")}
 
-        if owner in direct:
+    def _rank(row: DiagnosisRow, owner: str) -> int | None:
+        """这条结论对该工作负载的"贴近程度"；**不适用返回 `None`**。
+
+        | rank | 条件 | 界面语义 |
+        |---|---|---|
+        | `0` | 证据点名了工作负载自身 | 你自己的故障 |
+        | `1` | 证据在**归属于它**的资源上（容器 / 进程 / 它自己的 Agent），且该资源不是共享基础设施 | 你自己的故障 |
+        | `2` | 证据落在**共享基础设施**（宿主 / GPU / vGPU / VM）上，而它坐在上面 | **"你所在的机器/卡有问题"** |
+        | `None` | 无证据、或与本工作负载无关 | 不显示根因 |
+
+        **这条函数被实测纠正过三次**，把结论记在这里免得再走回头路：
+
+        1. 用 `affected_resources` 判归属 —— 那是**影响闭包**，会沿链向下把每个工作
+           负载自己的容器/Agent 都收进来，于是同一块卡上的全部服务（含健康场景）
+           都被标成"自身故障"。归属要看 `evidence`。
+        2. 用 `owners` 判"拥有" —— `owners` 是沿父链**向上**建的，共享的 vGPU 因此
+           被归给下面**全部五个**服务，于是每个都拿到 rank 1。那是在量"依赖"。
+        3. 用 `_directed_walk(owner)`（自身 + **后代**）判"拥有" —— 但 AI 服务在链路
+           **末端**，容器是它的**父**，根本不在"后代"里，于是它对自己的容器 OOM
+           只拿到 rank 2，输给了无关的 GPU 诊断。
+
+        最终：**"谁拥有它"用 `owners`（向上）回答**，这是唯一能同时正确涵盖
+        "我自己的容器"与"共享的 vGPU"的方向；**"是不是共享层"用资源类型回答** ——
+        共享与否是类型的性质，不是归属关系的性质。
+
+        共享基础设施上的证据一律 rank 2：一张 GPU 卡满时它上面的每个工作负载都受影响，
+        但**没有一个是"自己配错了"**。
+        """
+        evidence = _evidence_ids(row)
+        if not evidence:
+            # 无证据的结论不参与归属（与诊断引擎"无证据不得给根因"同一红线）
+            return None
+
+        if owner in evidence:
             return 0
-        plane = own_plane.get(owner, {owner})
-        if (touched & plane) - {owner} and (direct & plane):
-            return 1
-        return 2
+
+        # 证据落在"归属于这个工作负载"的资源上？共享层不算 —— 共享故障属于所有人，
+        # 也就不属于任何一个。
+        for resource_id in evidence:
+            if resource_id in shared_infra:
+                continue
+            if owner in owners.get(resource_id, ()):
+                return 1
+
+        # 只在共享基础设施上相关（它坐着的机器 / 卡）⇒ 共享级结论。
+        #
+        # **不要在这里并上 `all_resources`。** 曾经那样写过（想兜住"万一 reachable
+        # 没覆盖到"），后果是**任何**诊断都能匹配**任何**工作负载 —— 因为每条诊断的
+        # 证据集里都含一个共享层资源，于是网络诊断也匹配到了 GPU 场景的服务：
+        #     svc-gpu-self rank=2 NETWORK_UNREACHABLE   ← 实测
+        # `reachable`（自身 + 祖先 + 后代）本身就回答了"这条结论可能与它有关吗"，
+        # 对同一张卡上的每个工作负载都包含那块 vGPU，因此不需要兜底。
+        if evidence & reachable.get(owner, {owner}):
+            return 2
+        return None
 
     # 一次性算好每个工作负载的排序键 —— 不用"迭代中逐步替换"的写法：
     # 那种写法要求平面集合、自身节点、并列取舍三件事同时正确，任一处错就会静默
     # 退回"所有卡片都显示最新一条"（实测错了两次）。
-    best: dict[str, tuple[int, float]] = {}
-    chosen: dict[str, DiagnosisRow] = {}
+    # 排序键是**全序**：`(rank, -created, id)`。
+    #
+    # 加 id 不是凑数：实测所有演示诊断的 `created_at` **完全相同**（场景时间基准是
+    # 同一个时刻），于是 `(rank, -created)` 无法区分它们，Python 会保留**先遇到**的
+    # 那条 —— 一条无关的 rank 2 结论因此可能压过工作负载**自己的** rank 1 结论
+    # （实测：`demo-svc-oom` 显示成了 GPU 耗尽，而它自己的容器 OOM 结论被丢掉）。
+    #
+    # `diag_<ULID>` 的 id 是字典序即时间序，因此并列时"更早产生的结论优先"，
+    # 确定且可解释，不依赖行顺序。
+    best: dict[str, tuple[int, float, str]] = {}
+    chosen: dict[str, tuple[DiagnosisRow, int]] = {}
     for row in rows:
         created = row.created_at.timestamp()
         for owner in wanted_owners:
-            key = (_rank(row, owner), -created)
+            rank = _rank(row, owner)
+            if rank is None:
+                continue
+            key = (rank, -created, row.id)
             if owner not in best or key < best[owner]:
                 best[owner] = key
-                chosen[owner] = row
+                chosen[owner] = (row, rank)
 
     return chosen
 
