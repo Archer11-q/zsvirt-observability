@@ -43,6 +43,7 @@
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | 环境要求、部署步骤、配置项、模拟模式 |
 | [docs/SENSITIVE_DATA.md](docs/SENSITIVE_DATA.md) | 敏感信息保护：脱敏、字段过滤、访问控制 |
 | [docs/TEST_PLAN.md](docs/TEST_PLAN.md) | 测试分层、三类故障场景与验收闭环 |
+| [docs/EVENT_COVERAGE_MATRIX.md](docs/EVENT_COVERAGE_MATRIX.md) | **事件覆盖对账矩阵**（事件类型 → 告警规则 → 诊断规则，由代码生成） |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | **第三方依赖清单**（赛题交付要求 f） |
 | [docs/backend/BACKEND_DESIGN.md](docs/backend/BACKEND_DESIGN.md) | 后端模块设计 |
 | [docs/backend/DIAGNOSIS_DESIGN.md](docs/backend/DIAGNOSIS_DESIGN.md) | 诊断引擎与故障场景设计 |
