@@ -58,24 +58,72 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+#: 显式选择"只跑不依赖数据库的子集"时才设它。
+#: **默认不设** —— 见下面对"静默跳过"的说明。
+ALLOW_NO_DATABASE_ENV = "ALLOW_NO_DATABASE"
+
+
+def _allow_no_database() -> bool:
+    return os.environ.get(ALLOW_NO_DATABASE_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
 @pytest.fixture(scope="session")
 def db_engine() -> Iterator[Engine]:
-    """会话级引擎。测试库不可用时 skip 全部数据库测试。"""
+    """会话级引擎。
+
+    **测试库不可用时默认失败，而不是跳过。**
+
+    早先这里 `pytest.skip(...)`，于是整个依赖数据库的测试集在报告里变成
+    "skipped"、整轮仍然是绿的：
+
+        328 passed, 364 skipped        ← 看起来正常，实际 364 个用例根本没跑
+
+    本次会话我就撞上过一次，并且一开始把它当成了健康结果。更隐蔽的是
+    "schema 不对"（`alembic_version` 在、业务表不在）会产生同样的画面 ——
+    失败模式是"大部分测试静默地不执行"，与本项目在别处反复发现的同一类问题
+    （"读失败被报成空"、"恰好在最需要的时候跳过校验"）。
+
+    现在：连不上就**报错并给出完整诊断**；确实只想跑不依赖数据库的子集时，
+    显式设 `ALLOW_NO_DATABASE=1` 才回到跳过行为。另外主动校验 schema 是否
+    真的存在，让"有版本表没表"这种状态也响亮地失败。
+    """
     engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True, future=True)
     try:
         with engine.connect() as conn:
             conn.execute(text("select 1"))
     except Exception as exc:  # noqa: BLE001
-        pytest.skip(
-            f"测试库不可用，跳过数据库测试。\n"
-            f"  目标: {TEST_DATABASE_URL}\n"
+        message = (
+            f"测试库不可用：{TEST_DATABASE_URL}\n"
             f"  原因: {type(exc).__name__}: {exc}\n"
             f"  处理: 确认 PostgreSQL 在运行，且测试库已创建：\n"
             f"        sudo -u postgres psql -c 'ALTER ROLE crosslayer CREATEDB;'\n"
-            f"        然后 psql ... -c 'CREATE DATABASE crosslayer_test OWNER crosslayer;'"
+            f"        然后 psql ... -c 'CREATE DATABASE crosslayer_test OWNER crosslayer;'\n"
+            f"  只想跑不依赖数据库的子集: 设 {ALLOW_NO_DATABASE_ENV}=1"
         )
+        if _allow_no_database():
+            pytest.skip(message)
+        raise RuntimeError(message) from exc
+
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+
+    # `create_all` 之后必须真的能查到表 —— 防"版本表在、业务表不在"那种
+    # 半截 schema（它会精确地产生上面描述的静默跳过现象）。
+    with engine.connect() as conn:
+        missing = [
+            name
+            for name in ("resource", "event", "alert", "diagnosis")
+            if conn.execute(text("select to_regclass(:name)"), {"name": name}).scalar() is None
+        ]
+    if missing:
+        engine.dispose()
+        raise RuntimeError(
+            f"测试库 schema 不完整，缺少表：{missing}。"
+            f"建表后仍缺表说明数据库状态不一致，请重建："
+            f" DROP DATABASE crosslayer_test; CREATE DATABASE crosslayer_test OWNER crosslayer;"
+            f" 然后 alembic upgrade head"
+        )
+
     yield engine
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
