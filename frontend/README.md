@@ -2,7 +2,7 @@
 
 **负责人：成员 C**
 
-消费 B 实现的 15 个 B→C 查询端点（`docs/API_CONTRACT.md` §4），提供拓扑 / 工作负载 / 事件 / 告警 / 诊断五个页面 + 顶部健康状态条。
+消费 B 实现的 17 个 B→C 查询端点（`docs/API_CONTRACT.md` §4），提供拓扑 / 工作负载 / 事件 / 告警 / 诊断五个页面 + 顶部健康状态条。
 
 ## 技术栈（冻结 F-06）
 
@@ -34,7 +34,7 @@ npm run typecheck    # 仅类型检查（src + vite.config）
 ```
 src/
   api/client.ts       统一 fetch 客户端（{data,meta} 信封 + 错误模型，区分 502/503）
-  api/endpoints.ts    15 个端点封装
+  api/endpoints.ts    17 个端点封装
   types.ts            与后端 schemas 字段逐一对齐的 TS 类型
   lib/dict.tsx        字典上下文（GET /api/v1/dict 一次拉取、全局缓存，8 段对齐 build_dict_payload）
   lib/format.ts       时间 / 字节 / 百分比格式化
@@ -65,6 +65,8 @@ C **必须通过 API 获取数据，不得直接连接 B 的数据库**（团队
 | GET | `/api/v1/diagnoses` | 诊断列表（游标分页） |
 | GET | `/api/v1/diagnosis/{id}` | 诊断详情（?includeEvidence） |
 | POST | `/api/v1/diagnoses` | 手动触发诊断 |
+| POST | `/api/v1/diagnoses/{id}/ticket` | 诊断工单文本（**只读**，纯函数生成，契约 §4.12） |
+| GET | `/api/v1/metrics` | 事件内指标的时间序列（非 TSDB，契约 §4.11） |
 
 ## 几个必须遵守的契约约定
 
@@ -76,6 +78,11 @@ C **必须通过 API 获取数据，不得直接连接 B 的数据库**（团队
 6. **模拟数据必须可见**：`gpuProvider.mode=simulated` 与证据 `source=simulated` 在 UI 内联标注（诚实性），不伪装成真实采集。
 7. **GPU 归因口径必须可见**（D-104）：`gpuProvider.available=false` → 状态条红标签「GPU 指标读不到：<原因>」+ 内容区说明；`gpuProvider.attribution=passthrough` → 状态条橙标签「GPU 直通：卡级读数」+ 内容区说明，且工作负载表头改写为「GPU 显存（卡级）」。**这两条与 `mode=simulated` 一样不能只放在 tooltip 里**（`lib/gpu.ts`、`components/GpuDataNotice.tsx`）。
    注意 `available` 在模拟渠道下**不返回**：字段缺失 ≠ 报告不可用，`null` 不能当 `false` 用（会报出假的「读不到」）。
+8. **计数口径必须可见**（契约 §4.3）：`eventCount` / `alertCount` 按 `windowFrom` ~ `windowTo`（默认近 24h）统计，**窗口必须在页面上写出来**。窗口不可见时会出现自相矛盾的现象 —— 某个工作负载 `alertCount: 0` **同时** `rootCause` 非空（事件全在窗口外），用户只会认为界面坏了。
+9. **根因必须区分归属**（契约 §4.3）：`rootCauseScope` 为 `own` 才用强调色；`shared` 走弱化样式并**注明「共享基础设施」**；`null`（无归属）时**不显示根因**。一张卡满时卡上每个服务都受影响，但没有一个是"自己配错了" —— 不区分的话运维会去改一个没问题的服务。
+10. **数据新鲜度用 `isStale`，不要解析 `staleness` 字符串**（契约 §4.2.1）：`"13d"` 与 `"5m"` 的大小不在字面上。它与 `observability` 是两回事 —— 后者是 B 的生命周期判决，只作排障参考；早先两者耦合，而陈旧标记器默认关闭，导致虚线的视觉通道**永远不出现**。
+11. **指标不补单位**（契约 §4.11）：`/api/v1/metrics` 的 `unit` **恒为 `null`**（事件契约不携带单位），界面显示裸数值。从名称猜单位在 `io_wait_pct` 上碰巧对、在 `value` 上就是编造。曲线被裁剪时必须标出 —— "看起来完整其实被截断"的曲线会让人误判趋势平稳。
+12. **「复制为工单」不是「一键修复」**（契约 §4.12）：该端点**只读**，不写回 ZSvirt、不执行处置动作。`actionable: false`（`UNKNOWN` 或置信度 < 0.5）时不直接复制，先用 warning 样式讲清楚再让人自己决定。
 
 ## 前后端对账
 

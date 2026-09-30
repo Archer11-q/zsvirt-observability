@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Alert, Button, Card, Empty, Select, Space, Spin, Switch } from 'antd'
+import { Alert, Button, Card, Empty, Select, Space, Spin, Switch, Typography } from 'antd'
 import * as echarts from 'echarts'
 import { api } from '../api/endpoints'
 import { EChart } from '../components/EChart'
@@ -15,12 +15,18 @@ import type { TopologyNode } from '../types'
  * | 信息 | 通道 | 取值 |
  * |---|---|---|
  * | 资源类型 | 填充色 | `kindColor(kind)`，**按类型固定** |
- * | 观测状态 | 描边线型 | `stale` ⇒ 虚线（"数据不新了"） |
- * | 健康状态 | 描边粗细+颜色 | `error` ⇒ 加粗红边（"需要动作"） |
+ * | 数据新鲜度 | 描边线型 | `isStale` ⇒ 虚线（"数据不新了"） |
+ * | 健康状态 | 描边粗细+颜色 | `status==='error'` ⇒ 加粗红边（"需要动作"） |
  *
- * 早先把 `status==='error'` 与 `observability==='stale'` 都编码成**描边颜色**，
- * 于是两种状态并存时只能显示一个 —— 一个"已离线且报错"的节点看起来和普通
- * 离线节点一样。
+ * 两条历史教训都在这段映射里：
+ *
+ * 1. 早先把 `status==='error'` 与"陈旧"都编码成**描边颜色**，于是两种状态并存时
+ *    只能显示一个 —— 一个"已离线且报错"的节点看起来和普通离线节点一样。
+ * 2. 后来把"陈旧"接到了 `observability==='stale'` 上，而陈旧标记器默认关闭
+ *    （`RESOURCE_STALE_AFTER_SEC=0`，因为演示数据时间基准固定在 2026-09-17）
+ *    ⇒ `observability` 恒为 `active` ⇒ **这条虚线永远不会出现**。
+ *    现在改用 `isStale`（按**年龄**判定，与 `observability` 无关，契约 §4.2.1）。
+ *    `observability` 降为 tooltip 里的排障信息。
  */
 function nodeToEcharts(n: TopologyNode, kindIdx: Record<string, number>): any {
   return {
@@ -31,12 +37,13 @@ function nodeToEcharts(n: TopologyNode, kindIdx: Record<string, number>): any {
     rawKind: n.kind,
     rawStatus: n.status,
     rawObservability: n.observability,
+    rawIsStale: n.isStale,
     rawLastSeen: n.lastSeenAt,
     itemStyle: {
       color: kindColor(n.kind),
       borderColor: n.status === 'error' ? CHART_STYLE.nodeBorderError : CHART_STYLE.nodeBorder,
       borderWidth: n.status === 'error' ? 3 : 1,
-      borderType: n.observability === 'stale' ? 'dashed' : 'solid',
+      borderType: n.isStale ? 'dashed' : 'solid',
     },
   }
 }
@@ -72,6 +79,9 @@ export default function TopologyPage() {
             `<strong>${d.name}</strong>`,
             `类型: ${dict.resourceKind[d.rawKind] ?? d.rawKind}`,
             `状态: ${dict.resourceStatus?.[d.rawStatus] ?? d.rawStatus}`,
+            // 「数据是否陈旧」用 isStale，不去解析 staleness 字符串（契约 §4.2.1）。
+            // observability 是 B 的生命周期判决，只作排障参考，不与前者混用。
+            `数据${d.rawIsStale ? '陈旧（超过阈值未收到新观测）' : '新鲜'}`,
             `观测: ${dict.observability?.[d.rawObservability] ?? d.rawObservability}`,
             `最后心跳: ${fmtTime(d.rawLastSeen)}`,
           ].join('<br/>')
@@ -104,6 +114,7 @@ export default function TopologyPage() {
   }, [q.data, dict])
 
   const data = q.data?.data
+  const staleCount = data?.nodes.filter((n) => n.isStale).length ?? 0
 
   return (
     <Card
@@ -147,6 +158,13 @@ export default function TopologyPage() {
               message="拓扑已截断"
               description={`${data.truncationReason ?? '节点过多'}（丢弃 ${data.droppedNodes} 个节点）`}
             />
+          )}
+          {/* 虚线本身是"沉默的"信号：不解释的话，看到的人只会觉得图有毛病。
+              只在真有陈旧节点时才出现，健康的拓扑上不增加噪声。 */}
+          {staleCount > 0 && (
+            <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+              虚线描边 = 数据陈旧（{staleCount} 个节点超过后端阈值未收到新观测）
+            </Typography.Text>
           )}
           <EChart
             option={option}

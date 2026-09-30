@@ -12,11 +12,14 @@ import type {
   Diagnosis,
   DiagnosisListData,
   DiagnosisParams,
+  DiagnosisTicket,
   Dict,
   EventItem,
   EventListData,
   EventParams,
   HealthResponse,
+  MetricListData,
+  MetricParams,
   TopologyData,
   TopologyParams,
   TriggerDiagnosisRequest,
@@ -58,4 +61,9 @@ export const api = {
     apiGet<Diagnosis>(`/api/v1/diagnosis/${id}`, { includeEvidence }),
   triggerDiagnosis: (body: TriggerDiagnosisRequest) =>
     apiPost<TriggerDiagnosisResponse>('/api/v1/diagnoses', body),
+  /** 把一条诊断渲染成可直接粘贴的工单文本。**只读**，无请求体。 */
+  diagnosisTicket: (id: string) => apiPost<DiagnosisTicket>(`/api/v1/diagnoses/${id}/ticket`),
+
+  // ---- 指标时间序列（事件内指标，非 TSDB；契约 §4.11）----
+  metrics: (p?: MetricParams) => apiGet<MetricListData>('/api/v1/metrics', p),
 }
