@@ -41,6 +41,8 @@ from app.api.schemas.diagnosis import (
 from app.api.schemas.events import EventData
 from app.db import get_db
 from app.diagnosis import service as diagnosis_service
+from app.diagnosis.ticket import render_ticket
+from app.enums import ROOT_CAUSE_LABELS
 from app.models import Diagnosis as DiagnosisRow
 from app.models import Event
 
@@ -103,6 +105,75 @@ def list_diagnoses(
             page=PageMeta(limit=limit, nextCursor=next_cursor, count=len(items))
         ).model_dump(mode="json"),
     }
+
+
+@router.post("/api/v1/diagnoses/{diagnosis_id}/ticket")
+def make_ticket(session: DbSession, diagnosis_id: str) -> Any:
+    """把一条诊断渲染成可直接粘贴进工单系统的文本。
+
+    **只读**：不写库、不写回 ZSvirt、不执行任何处置动作。赛题评审里
+    「处置建议」与「运维决策」要的是可交接的结论，而本项目对 ZSvirt 只申请
+    只读权限 —— 守住这条边界比多做一个"一键重启"重要。
+
+    文本由 `app/diagnosis/ticket.py::render_ticket` 这个**纯函数**生成：
+    同一诊断必然产出同一文本，工单归档后才有证据价值。
+    """
+    row = session.get(DiagnosisRow, diagnosis_id)
+    if row is None:
+        return not_found(
+            "DIAGNOSIS_NOT_FOUND", f"诊断不存在：{diagnosis_id}", diagnosisId=diagnosis_id
+        )
+
+    document = render_ticket(
+        diagnosis_id=row.id,
+        created_at=row.created_at,
+        root_cause=row.root_cause,
+        confidence=row.confidence,
+        confidence_breakdown=list(row.confidence_breakdown or []),
+        affected=list(row.affected_resources or []),
+        on_chain=list(row.on_chain or []),
+        potentially_affected=list(row.potentially_affected or []),
+        evidence=list(row.evidence or []),
+        recommendation=[
+            {"code": str(r.get("code", "")), "text": str(r.get("text", ""))}
+            for r in (row.recommendation or [])
+        ],
+        rule_set_version=row.rule_set_version,
+        notes=list(row.notes or []),
+        trigger=dict(row.trigger or {}),
+        # 文案取自**字典的唯一定义点**，不在这里硬编码中文 ——
+        # 否则工单里的根因名会和界面上显示的不一致。
+        root_cause_label=ROOT_CAUSE_LABELS.get(row.root_cause),
+        resource_labels=_resource_labels(session, row),
+    )
+
+    return {
+        "data": {
+            "diagnosisId": document.diagnosisId,
+            "title": document.title,
+            "text": document.text,
+            "rootCause": document.rootCause,
+            "confidence": document.confidence,
+            "actionable": document.actionable,
+        },
+        "meta": build_meta().model_dump(mode="json"),
+    }
+
+
+def _resource_labels(session: Session, row: DiagnosisRow) -> dict[str, str]:
+    """资源 id → 可读名。命名缺失时留空，由渲染层回退到原始 id。"""
+    from app.models import Resource
+
+    ids = {
+        *list(row.affected_resources or []),
+        *list(row.on_chain or []),
+        *list(row.potentially_affected or []),
+        *(str(e["resourceId"]) for e in (row.evidence or []) if e.get("resourceId")),
+    }
+    if not ids:
+        return {}
+    rows = session.execute(select(Resource).where(Resource.id.in_(sorted(ids)))).scalars()
+    return {r.id: r.name for r in rows if r.name}
 
 
 @router.get("/api/v1/diagnosis/{diagnosis_id}")
