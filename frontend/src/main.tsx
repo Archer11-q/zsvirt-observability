@@ -7,6 +7,8 @@ import zhCN from 'antd/locale/zh_CN'
 import 'antd/dist/reset.css'
 import App from './App'
 import { DictProvider } from './lib/dict'
+import { antdTheme } from './theme'
+import './styles.css'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -25,7 +27,7 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ConfigProvider locale={zhCN}>
+      <ConfigProvider locale={zhCN} theme={antdTheme}>
         <AntApp>
           <DictProvider>
             <BrowserRouter>

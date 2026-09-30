@@ -98,16 +98,67 @@ def _matches(rule: Rule, ev: Evidence, resource_kind: str | None) -> bool:
     return True
 
 
-def _score(hits: list[RuleHit]) -> tuple[float, list[str]]:
-    """对同一 root_cause 的命中求和并裁剪。返回 (confidence, 备注)。"""
+#: 合成明细行的 ruleId 前缀。以它开头的行**不是规则**，是引擎对分数的调整，
+#: 消费方应把它们渲染成"说明"而不是去规则集里查它们。
+ADJUSTMENT_PREFIX = "__"
+
+#: 冲突降权的明细行 id。
+CONFLICT_PENALTY_RULE_ID = f"{ADJUSTMENT_PREFIX}conflict_penalty{ADJUSTMENT_PREFIX}"
+
+
+def _adjustment(rule_id: str, contribution: float, observed: str) -> RuleHit:
+    """构造一条"调整"明细行。`root_cause` 留空：它不属于任何根因候选。"""
+    return RuleHit(
+        rule_id=rule_id,
+        root_cause="",
+        contribution=round(contribution, 4),
+        observed=observed,
+    )
+
+
+def _score(hits: list[RuleHit]) -> tuple[float, list[str], float]:
+    """对同一 root_cause 的命中求和并裁剪。
+
+    返回 `(confidence, 备注, 裁剪前的原始和)`。
+
+    **额外返回原始和**是为了让调用方能生成一条"裁剪/归零"的明细行 ——
+    否则 `confidence` 与 breakdown 之和会对不上（那正是本函数此前留下的坑）。
+    """
     notes: list[str] = []
-    total = sum(h.contribution for h in hits)
+    raw = round(sum(h.contribution for h in hits), 4)
+    total = raw
     if total < 0.0:
         total = 0.0
     if total > 1.0:
         notes.append("confidence 裁剪到 1.0")
         total = 1.0
-    return round(total, 4), notes
+    return round(total, 4), notes, raw
+
+
+def _clamp_adjustment(hits: list[RuleHit], *, confidence: float, raw: float) -> list[RuleHit]:
+    """裁剪/归零的明细行（无条件可复算的关键）。
+
+    和相等时返回空列表 —— 不做无谓的调整行，避免明细里出现 `+0.0000` 噪声。
+    """
+    if abs(raw - confidence) < 1e-9:
+        return []
+    if confidence >= 1.0:
+        return [
+            _adjustment(
+                f"{ADJUSTMENT_PREFIX}clamp_to_1{ADJUSTMENT_PREFIX}",
+                confidence - raw,
+                f"规则贡献合计 {raw} 超过上限，裁剪到 1.0",
+            )
+        ]
+    if confidence <= 0.0 and raw < 0:
+        return [
+            _adjustment(
+                f"{ADJUSTMENT_PREFIX}floor_to_0{ADJUSTMENT_PREFIX}",
+                confidence - raw,
+                f"规则贡献合计 {raw} 为负，下限归零",
+            )
+        ]
+    return []
 
 
 def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
@@ -204,18 +255,35 @@ def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
     # ---- 步骤 5：评分 ----
     scored = {cause: _score(hits) for cause, hits in by_cause.items()}
     ranked = sorted(scored.items(), key=lambda kv: kv[1][0], reverse=True)
-    top_cause, (top_conf, top_notes) = ranked[0]
+    top_cause, (top_conf, top_notes, top_raw) = ranked[0]
     notes.extend(top_notes)
+
+    #: 记在明细里的调整行。**每一条分数改动都必须在这里留痕**，
+    #: 否则 breakdown 之和与 confidence 又会分家（见本文件顶部注释）。
+    adjustments: list[RuleHit] = _clamp_adjustment(
+        by_cause[top_cause], confidence=top_conf, raw=top_raw
+    )
 
     # 冲突降权：另一候选得分接近时双方都降权
     if len(ranked) > 1:
-        second_cause, (second_conf, _) = ranked[1]
+        second_cause, (second_conf, _, _) = ranked[1]
         if abs(top_conf - second_conf) < 0.15:
             penalty = 0.20
+            before = top_conf
             top_conf = round(max(0.0, top_conf - penalty), 4)
+            # 明细行让"0.55 的规则 + 一条 -0.20 的降权 = 0.35"在表里就能算出来，
+            # 而不是藏在备注里让人以为算错了。
+            adjustments.append(
+                _adjustment(
+                    CONFLICT_PENALTY_RULE_ID,
+                    top_conf - before,
+                    f"候选冲突：与 {second_cause} 得分接近"
+                    f"（{before} vs {second_conf}），双方降权 {penalty}",
+                )
+            )
             notes.append(
                 f"候选冲突：{top_cause} 与 {second_cause} 得分接近"
-                f"（{top_conf + penalty} vs {second_conf}），双方降权 {penalty}"
+                f"（{before} vs {second_conf}），双方降权 {penalty}"
             )
 
     if top_conf < MIN_CONFIDENCE:
@@ -226,7 +294,8 @@ def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
             trigger={"anchorResourceId": ctx.anchor_resource_id},
             root_cause=UNKNOWN_ROOT_CAUSE,
             confidence=top_conf,
-            confidence_breakdown=tuple(by_cause[top_cause]),
+            confidence_breakdown=tuple(by_cause[top_cause])
+            + tuple(_clamp_adjustment(by_cause[top_cause], confidence=top_conf, raw=top_raw)),
             evidence=tuple(relevant),
             recommendation=RECOMMENDATIONS[UNKNOWN_ROOT_CAUSE],
             rule_set_version=ctx.rule_set.version,
@@ -269,7 +338,7 @@ def diagnose(ctx: DiagnosisContext, now: datetime | None = None) -> Diagnosis:
         trigger={"anchorResourceId": ctx.anchor_resource_id},
         root_cause=top_cause,
         confidence=top_conf,
-        confidence_breakdown=tuple(by_cause[top_cause]),
+        confidence_breakdown=tuple(by_cause[top_cause]) + tuple(adjustments),
         affected_resources=scope.affected,
         potentially_affected=scope.potentially_affected,
         on_chain=scope.on_chain,

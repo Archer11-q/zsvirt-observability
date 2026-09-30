@@ -5,25 +5,37 @@ import * as echarts from 'echarts'
 import { api } from '../api/endpoints'
 import { EChart } from '../components/EChart'
 import { QueryError } from '../components/QueryError'
+import { CHART_STYLE, kindColor } from '../lib/chart'
 import { useDict } from '../lib/dict'
 import { fmtTime } from '../lib/format'
 import type { TopologyNode } from '../types'
 
-const KIND_PALETTE = ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#9a60b4', '#fc8452', '#3ba272']
-
+/** 一个节点同时承载三个独立信息，用三种不同的视觉通道表达，互不抢占：
+ *
+ * | 信息 | 通道 | 取值 |
+ * |---|---|---|
+ * | 资源类型 | 填充色 | `kindColor(kind)`，**按类型固定** |
+ * | 观测状态 | 描边线型 | `stale` ⇒ 虚线（"数据不新了"） |
+ * | 健康状态 | 描边粗细+颜色 | `error` ⇒ 加粗红边（"需要动作"） |
+ *
+ * 早先把 `status==='error'` 与 `observability==='stale'` 都编码成**描边颜色**，
+ * 于是两种状态并存时只能显示一个 —— 一个"已离线且报错"的节点看起来和普通
+ * 离线节点一样。
+ */
 function nodeToEcharts(n: TopologyNode, kindIdx: Record<string, number>): any {
   return {
     id: n.id,
     name: n.name ?? n.id,
     category: kindIdx[n.kind] ?? 0,
-    symbolSize: n.kind === 'host' || n.kind === 'gpu' ? 46 : 32,
+    symbolSize: n.kind === 'host' || n.kind === 'gpu' ? 46 : 34,
     rawKind: n.kind,
     rawStatus: n.status,
     rawObservability: n.observability,
     rawLastSeen: n.lastSeenAt,
     itemStyle: {
-      borderColor: n.status === 'error' ? '#ff4d4f' : '#d9d9d9',
-      borderWidth: n.status === 'error' ? 3 : n.observability === 'stale' ? 2 : 1,
+      color: kindColor(n.kind),
+      borderColor: n.status === 'error' ? CHART_STYLE.nodeBorderError : CHART_STYLE.nodeBorder,
+      borderWidth: n.status === 'error' ? 3 : 1,
       borderType: n.observability === 'stale' ? 'dashed' : 'solid',
     },
   }
@@ -52,20 +64,21 @@ export default function TopologyPage() {
 
     return {
       tooltip: {
+        ...CHART_STYLE.tooltip,
         formatter: (params: any) => {
           if (params?.dataType !== 'node' || !params?.data) return ''
           const d = params.data as Record<string, any>
           return [
-            `${d.name}`,
+            `<strong>${d.name}</strong>`,
             `类型: ${dict.resourceKind[d.rawKind] ?? d.rawKind}`,
-            `状态: ${d.rawStatus}`,
-            `观测: ${d.rawObservability}`,
+            `状态: ${dict.resourceStatus?.[d.rawStatus] ?? d.rawStatus}`,
+            `观测: ${dict.observability?.[d.rawObservability] ?? d.rawObservability}`,
             `最后心跳: ${fmtTime(d.rawLastSeen)}`,
           ].join('<br/>')
         },
       },
       legend: kinds.length
-        ? { data: kinds.map((k) => ({ name: dict.resourceKind[k] ?? k })), top: 0 }
+        ? { ...CHART_STYLE.legend, data: kinds.map((k) => ({ name: dict.resourceKind[k] ?? k })) }
         : undefined,
       series: [
         {
@@ -74,13 +87,17 @@ export default function TopologyPage() {
           roam: true,
           data: nodes.map((n) => nodeToEcharts(n, kindIdx)),
           links: edges.map((e) => ({ source: e.parentId, target: e.childId })),
-          categories: kinds.map((k, i) => ({
+          // 图例分类只用来分组与着色，颜色来自 kindColor（按类型固定）。
+          // 这里**不再按 kinds 的下标取色** —— 那样换根节点下钻就会变色。
+          categories: kinds.map((k) => ({
             name: dict.resourceKind[k] ?? k,
-            itemStyle: { color: KIND_PALETTE[i % KIND_PALETTE.length] },
+            itemStyle: { color: kindColor(k) },
           })),
-          label: { show: true, position: 'right', fontSize: 11 },
-          force: { repulsion: 240, edgeLength: 120 },
-          lineStyle: { color: '#bfbfbf', width: 1, curveness: 0.08 },
+          label: CHART_STYLE.label,
+          force: { repulsion: 320, edgeLength: 130 },
+          lineStyle: { color: CHART_STYLE.edge, width: 1.2, curveness: 0.06 },
+          // 节点层级：数据量大时让大节点（宿主/GPU）压在小节点之上，避免被盖住
+          emphasis: { focus: 'adjacency', scale: 1.15 },
         },
       ],
     } as echarts.EChartsOption

@@ -313,16 +313,12 @@ def _assert_confidence_reproducible(result: Diagnosis) -> None:
     这是 D-036「可复算」的落地。若引擎将来改动破坏了可复算性，
     这里会立刻失败，而不是让用户拿到一个无法解释的数字。
 
-    注意：**降权/裁剪会让两者不再相等**（引擎在冲突降权与裁剪到 1.0 时
-    会改写 confidence），因此只在 breakdown 本身就是最终得分时校验 ——
-    判据是"引擎没有在 notes 里报告任何改写"。
+    **无条件校验。** 这里此前是"引擎改写过分数的就跳过" —— 于是降权与裁剪
+    这两种最需要解释的情况恰恰没有校验，线上出现过「明细只有 +0.55，总分却是
+    0.35」的观感缺陷。现在引擎把每一次调整都写成 `__…__` 明细行
+    （见 `app/diagnosis/engine.py` 的 `_adjustment`），所以等式在任何情况下都
+    必须成立；不成立即为引擎缺陷。
     """
-    rewritten = any(
-        ("裁剪" in note) or ("降权" in note) or ("强制返回 UNKNOWN" in note)
-        for note in result.notes
-    )
-    if rewritten:
-        return
     total = sum(h.contribution for h in result.confidence_breakdown)
     if abs(total - result.confidence) > 1e-6:
         raise AssertionError(

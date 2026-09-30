@@ -1,0 +1,134 @@
+/* Crosslayer 全局基础样式。
+ *
+ * 这里**只放 antd token 覆盖不到的东西**：CSS 变量、品牌区、以及少量
+ * "一处生效全站受益"的排版规则。组件级别的样式仍然走 antd token
+ * （见 `src/theme.ts`）——两套并行会立刻产生漂移。
+ *
+ * 之所以现在才出现这个文件：在此之前前端**一个 CSS 文件都没有**，
+ * 全部样式靠 38 处内联 `style={{}}`。内联样式无法定义 hover、无法定义
+ * 响应式、也无法给"所有数值"这类跨组件的规则统一要求，所以字号、圆角、
+ * 颜色只能各页面各写一遍。
+ */
+
+/* 让 antd 的 CSS 变量在本页可用（ConfigProvider 已设 cssVar: true）。
+   放在 :root 是为了让下面几条全局规则能引用 token 而不是再硬编码一遍颜色。 */
+:root {
+  --cl-brand-sidebar: #0f1720;
+  --cl-brand-accent: #0e7c86;
+  --cl-brand-accent-soft: #e6f4f5;
+  --cl-text: #1a2430;
+  --cl-text-secondary: #5a6b7b;
+  --cl-border: #e3e8ec;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--cl-text);
+  background: #f5f7f8;
+  /* 关闭 iOS/移动端的字体自动放大，保持与桌面一致的字号观感 */
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ------------------------------------------------------------------ 品牌区 */
+
+/* 侧栏品牌标记：一个方形色块 + 产品名。
+   在此之前它只是一个 <div>Crosslayer</div> —— 没有 logo、没有分隔、
+   和下面的菜单项在视觉上处于同一层级，所以整个侧栏看起来"没有头"。 */
+.cl-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 56px;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  user-select: none;
+}
+
+.cl-brand__mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: linear-gradient(140deg, var(--cl-brand-accent), #2c9a9a);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+  flex: 0 0 auto;
+}
+
+.cl-brand__sub {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.4px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* ------------------------------------------------------------------ 顶栏 */
+
+/* 状态条把五项组件状态并排显示，需要能与内容区区分开又不喧宾夺主 */
+.cl-header {
+  border-bottom: 1px solid var(--cl-border);
+}
+
+/* ------------------------------------------------------------------ 数值 */
+
+/* **跨组件的排版规则，这是内联样式做不到的那一类。**
+   ID、时间戳、置信度、耗时都属于"竖着扫读"的数值：等宽 + tabular-nums
+   能让数字按位对齐，扫一列时间戳时不需要左右找。 */
+.cl-num {
+  font-family: ui-monospace, SFMono-Regular, 'Cascadia Mono', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 原始 JSON／ID 的展示块：加底、限高、可滚动。
+   原先 <pre> 直接把 JSON 糊在抽屉里，既没有边界也没有滚动上限。 */
+.cl-pre {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 340px;
+  overflow: auto;
+  border: 1px solid var(--cl-border);
+  border-radius: 8px;
+  background: #f7f9fa;
+  font-family: ui-monospace, SFMono-Regular, 'Cascadia Mono', Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ------------------------------------------------------------------ 细节 */
+
+/* 表格里的资源 ID 很长，用等宽但略小一号，避免撑破列宽 */
+.cl-id {
+  font-family: ui-monospace, SFMono-Regular, 'Cascadia Mono', Consolas, monospace;
+  font-size: 13px;
+  color: var(--cl-text-secondary);
+}
+
+/* 尊重"减少动态效果"偏好。控制台本身动效极少，但 antd 有过渡，
+   这里统一兜底，避免对前庭敏感的用户造成不适。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 滚动条：Windows 默认滚动条较宽且高对比，在密集表格里很抢眼 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #c3ccd4 transparent;
+}
