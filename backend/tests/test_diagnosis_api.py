@@ -327,6 +327,46 @@ class TestTriggerDiagnosis:
 # ================================================================ 详情
 
 
+class TestDiagnosisDuration:
+    """诊断耗时必须**落库并回读**，列表接口不能整列为空。"""
+
+    def test_triggered_diagnosis_reports_a_measured_duration(
+        self, client: TestClient, db_session: Session, with_rules: RuleSet
+    ) -> None:
+        """刚触发的诊断：耗时来自本次测量的返回值。"""
+        seed_scenario(db_session)
+
+        data = client.post(
+            "/api/v1/diagnoses",
+            json={"anchorResourceId": f.AIS, "window": f.window_from()},
+        ).json()["data"]
+
+        assert data["durationMs"] is not None, "触发路径必须给出本次测量的耗时"
+        assert isinstance(data["durationMs"], int)
+        assert data["durationMs"] >= 0
+
+    def test_list_endpoint_reports_the_persisted_duration(
+        self, client: TestClient, db_session: Session, with_rules: RuleSet
+    ) -> None:
+        """**回归点**：列表接口读的是**落库的值**。
+
+        早先 `to_diagnosis` 只接受一个由详情路径传入的 `duration_ms` 参数，
+        列表路径从不传它，于是列表整列为 `null`。这条锁住"读回库里的值"。
+        """
+        seed_scenario(db_session)
+        client.post(
+            "/api/v1/diagnoses",
+            json={"anchorResourceId": f.AIS, "window": f.window_from()},
+        )
+
+        items = client.get("/api/v1/diagnoses").json()["data"]["items"]
+        assert items, "场景应产生至少一条诊断"
+        for item in items:
+            assert item["durationMs"] is not None, (
+                f"列表里的 {item['id']} 耗时为 null —— 落库或回读又断了"
+            )
+
+
 class TestGetDiagnosis:
     def test_shape_matches_contract(
         self, client: TestClient, db_session: Session, with_rules: RuleSet

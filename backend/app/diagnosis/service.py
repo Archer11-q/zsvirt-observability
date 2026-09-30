@@ -300,6 +300,7 @@ def run_diagnosis(
         recommendation=[{"code": r.code, "text": r.text} for r in result.recommendation],
         rule_set_version=result.rule_set_version,
         notes=list(result.notes),
+        duration_ms=duration_ms,
     )
     session.add(row)
     session.flush()

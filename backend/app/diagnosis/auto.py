@@ -365,7 +365,9 @@ def _diagnose_cluster(
     window_to = max(m.last_fired_at for m in members) + diagnosis_service.DEFAULT_WINDOW_AFTER
     window = diagnosis_service.TimeWindow(window_from, window_to)
 
-    row, _duration_ms = diagnosis_service.run_diagnosis(
+    # 耗时已落库（`diagnosis.duration_ms`）；早先写成 `_duration_ms` 把它丢掉，
+    # 于是诊断列表的「耗时」列整列为空。
+    row, _ = diagnosis_service.run_diagnosis(
         session,
         anchor_resource_id=anchor_resource_id,
         window=window,

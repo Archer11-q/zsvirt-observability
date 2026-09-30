@@ -346,6 +346,9 @@ class Diagnosis(Base):
     #: 产出该结论的规则集版本 —— 结论可复现的前提
     rule_set_version: Mapped[str] = mapped_column(String(64), nullable=False)
     notes: Mapped[list[str]] = mapped_column(PG_ARRAY(Text), nullable=False, default=list)
+    #: 诊断耗时（毫秒）。**可空**：本次迁移之前写入的行没有测量值，
+    #: 回填一个猜测值等于伪造一个看起来像测量结果的数字。
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         CheckConstraint("confidence >= 0.0 AND confidence <= 1.0", name="ck_diagnosis_confidence"),

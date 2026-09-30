@@ -238,7 +238,9 @@ def to_diagnosis(row: DiagnosisRow, *, duration_ms: int | None = None) -> Diagno
         ],
         ruleSetVersion=row.rule_set_version,
         notes=list(row.notes or []),
-        durationMs=duration_ms,
+        # 优先用落库的耗时；调用方传入的用于"刚算出来、还没读回来"的场景。
+        # 两者都为 None 时如实返回 null —— 不编一个 0 冒充测量值。
+        durationMs=duration_ms if duration_ms is not None else row.duration_ms,
     )
 
 
