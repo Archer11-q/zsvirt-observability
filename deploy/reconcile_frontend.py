@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import json
 import pathlib
 import re
 import sys
@@ -32,8 +31,7 @@ USING_MIRROR = FE != _REPO_FE
 
 if not (FE / "types.ts").exists():
     raise SystemExit(
-        f"找不到前端源码（尝试过 {_REPO_FE} 与 {_MIRROR_FE}）；"
-        "对账必须在仓库工作区内运行"
+        f"找不到前端源码（尝试过 {_REPO_FE} 与 {_MIRROR_FE}）；对账必须在仓库工作区内运行"
     )
 
 TYPES = (FE / "types.ts").read_text(encoding="utf-8")
@@ -46,8 +44,7 @@ notes: list[str] = []
 notes.append(f"前端源码：{FE}")
 if USING_MIRROR:
     problems.append(
-        f"正在对账**暂存镜像**而非仓库（{FE}）：镜像会落后，结论不可信。"
-        "请在仓库工作区内运行本脚本"
+        f"正在对账**暂存镜像**而非仓库（{FE}）：镜像会落后，结论不可信。请在仓库工作区内运行本脚本"
     )
 
 
@@ -175,20 +172,65 @@ for path, type_name in CHECK.items():
 
     missing_in_fe = actual - declared
     if missing_in_fe:
-        problems.append(
-            f"{path}: 响应字段前端未声明 {sorted(missing_in_fe)}（{type_name}）"
-        )
+        problems.append(f"{path}: 响应字段前端未声明 {sorted(missing_in_fe)}（{type_name}）")
 
     missing_in_api = set(required) - actual
     if missing_in_api:
-        problems.append(
-            f"{path}: 前端必需字段在响应里缺失 {sorted(missing_in_api)}（{type_name}）"
-        )
+        problems.append(f"{path}: 前端必需字段在响应里缺失 {sorted(missing_in_api)}（{type_name}）")
 
     notes.append(
         f"  {type_name}: 声明 {len(declared)} 字段，响应 {len(actual)} 字段，"
         f"未声明 {len(missing_in_fe)}，缺失 {len(missing_in_api)}"
     )
+
+# ---------------------------------------------------------------- 信封字段比对
+# 上面的比对只看**列表条目**（items[0] / nodes[0] …），而响应 `data` 的**顶层字段**
+# 从来没被检查过。于是 `WorkloadListData` 这类信封类型里未声明的字段（实测有
+# `gpuProviderMode` / `windowFrom` / `windowTo` 三个）在任何一次运行里都报不出来 ——
+# 结构上就看不见，而不是配置遗漏。
+#
+# 这几个字段不是装饰：`windowFrom` / `windowTo` 是告警/事件计数的**统计窗口**，
+# 窗口在界面上不可见时会出现"0 条告警 + 一个确定根因"的自相矛盾。
+ENVELOPE = {
+    "/api/v1/health": "HealthResponse",
+    "/api/v1/topology": "TopologyData",
+    "/api/v1/events": "EventListData",
+    "/api/v1/alerts": "AlertListData",
+    "/api/v1/workloads": "WorkloadListData",
+    "/api/v1/diagnoses": "DiagnosisListData",
+}
+
+for path, type_name in ENVELOPE.items():
+    status, payload = probe(path)
+    if status != 200 or not isinstance(payload, dict):
+        continue
+    data = payload.get("data")
+    if not isinstance(data, dict) or not data:
+        continue
+
+    required, optional, _body = TYPES_MAP.get(type_name, ([], [], ""))
+    if not required and not optional:
+        notes.append(f"  {type_name}（信封）: 前端未声明，跳过顶部字段比对")
+        continue
+
+    declared = set(required) | set(optional)
+    actual = set(data)
+
+    missing_in_fe = actual - declared
+    if missing_in_fe:
+        problems.append(
+            f"{path}: 响应**顶层**字段前端未声明 {sorted(missing_in_fe)}（{type_name}）"
+        )
+    missing_in_api = set(required) - actual
+    if missing_in_api:
+        problems.append(
+            f"{path}: 前端必需的信封字段在响应里缺失 {sorted(missing_in_api)}（{type_name}）"
+        )
+    notes.append(
+        f"  {type_name}（信封）: 声明 {len(declared)} 字段，响应 {len(actual)} 字段，"
+        f"未声明 {len(missing_in_fe)}，缺失 {len(missing_in_api)}"
+    )
+
 
 # ---------------------------------------------------------------- 枚举对账
 dict_payload = httpx.get(f"{BASE}/api/v1/dict", timeout=10).json()["data"]

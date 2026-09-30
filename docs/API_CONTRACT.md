@@ -230,6 +230,8 @@ POST /api/v1/ingest/batch
 | GET | `/api/v1/diagnoses` | 诊断列表（C 要求，否则无法发现无告警关联的诊断） | **【已确认】新增** |
 | POST | `/api/v1/diagnoses` | 手动触发一次诊断（C 要求，演示与联调需要） | **【已确认】新增** |
 | GET | `/api/v1/dict` | 枚举字典（含 rootCause / recommendation 可读文案） | **【已确认】新增** |
+| GET | `/api/v1/metrics` | 事件内指标的**时间序列**（趋势；见 §4.11） | **【已确认】新增**（2026-09-30） |
+| POST | `/api/v1/diagnoses/{id}/ticket` | 把诊断渲染成**工单文本**（见 §4.12） | **【已确认】新增**（2026-09-30） |
 
 **已确认变更说明**（依据 C 的 `frontend/FRONTEND_DESIGN.md`）：
 1. 采纳 `/api/v1` 版本前缀（Q9），`/api/health` 保持无前缀。
@@ -239,6 +241,12 @@ POST /api/v1/ingest/batch
 5. 首版**纯轮询**，不引入 SSE / WebSocket；SSE 列为可选演进项（Q11）。
 6. 拓扑单次响应上限 **节点 ≤ 200、边 ≤ 400**（Q12），超限必须 `truncated: true`。
 7. 首版**不引入用户级认证**；可选**单一只读 Bearer Token**（Q8），见 §4.8。
+8. **2026-09-30 新增**：指标时间序列端点（§4.11）与诊断工单端点（§4.12）。
+   前者解决"告警文案是时间序列语义（'延迟飙升至 800ms'）而工具只有单点快照"的缺口；
+   后者解决"处置建议只是文字、需人工抄进工单系统（抄的过程会丢证据）"的缺口。
+   两者均**不引入新存储**（见 §4.11 的边界说明），符合 `ADR-0003`。
+9. **新增字段在前端一律声明为必需**（团队 2026-09-30 确认）：后端总是返回它们；
+   声明为可选会掩盖"后端漏返字段"，而那正是前后端对账要防的一类漂移。
 
 ### 4.2 `GET /api/v1/topology`
 
@@ -279,10 +287,23 @@ C 指出 `DATA_MODEL.md` §4.1 的 `status` 与 §7 生命周期是两套词汇�
 |---|---|---|---|
 | `status` | `running` \| `stopped` \| `error` \| `unknown` | **业务状态**（来源系统给出） | 前端状态标签与颜色 |
 | `lastSeenAt` | timestamp | B 最近一次观测到该资源的时间 | "数据新鲜度"展示 |
-| `staleness` | string \| null | 距上次观测的时长（如 `"10m"`） | 前端提示"数据陈旧" |
+| `staleness` | string \| null | 距上次观测的时长（如 `"10m"` / `"3d"`） | 前端提示"数据陈旧" |
+| `isStale` | boolean | `staleness` 是否**已超阈值**（后端 `TOPOLOGY_STALENESS_WARN_SEC`，默认 300s） | 前端**直接用它**决定是否高亮，不必解析 `staleness` 字符串 |
 | `observability` | `active` \| `stale` \| `gone` | **B 的观测状态**（内部生命周期） | 排障；`includeStale` 参数据此过滤 |
 
 **结论：`status` 与 `observability` 是两个独立字段，不得混用。** `stale` / `gone` 永远不出现在 `status` 中。
+
+**2026-09-30 修正 `staleness` 与 `observability` 的耦合**：早先 `staleness` 只在
+`observability != active` 时给出。但后台陈旧标记默认关闭（`RESOURCE_STALE_AFTER_SEC=0`，
+因为演示数据的时间基准固定在 2026-09-17），于是 `observability` 永远是 `active`、
+`staleness` **永远是空** —— 一个本契约承诺给前端的字段永久为空。
+
+更要紧的是耦合本身不对：「多久没听到这个资源的心跳」是**关于时间的事实**，不是判决。
+挂在判决上会让界面在越过阈值**之前**无法预警，也无法显示年龄。
+
+现在：`staleness` / `isStale` 按**年龄**给出，与 `observability` 无关；
+低于阈值仍为 `null` / `false`（保留"不要 0s 前噪声"的原意）。
+`observability` 仍由后台标记器负责 —— **两者各归各**。
 
 ### 4.3 `GET /api/v1/workloads`（【已确认】语义）
 
@@ -298,9 +319,119 @@ C 指出 `DATA_MODEL.md` §4.1 的 `status` 与 §7 生命周期是两套词汇�
 | `attributes` | `framework` / `modelName` / `endpoint` / `concurrency` / `qps` |
 | `resourceUsage` | 底层资源占用：GPU 利用率、显存、内存 |
 | `alertCount` / `eventCount` | 关联告警 / 事件计数 |
+| `firingAlertCount` | 其中仍处于 `firing` 的告警数 |
+| `rootCause` | 关联诊断的根因码（若有） |
 | `diagnosisId` | 关联诊断（若有，否则 `null`） |
+| `parentId` | 所属容器 / VM（若有） |
 
+**响应 `data` 的顶层字段**（不是每个 item 上）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `items` | array | 工作负载列表 |
+| `gpuProviderMode` | string | 当前 GPU 数据渠道（`zsvirt-zwatch` / `guest-smi` / `simulated` / `auto`） |
+| `windowFrom` | string | **事件 / 告警计数的统计窗口起点**（UTC ISO8601） |
+| `windowTo` | string | 统计窗口终点 |
+
+> **`windowFrom` / `windowTo` 必须展示给用户。** 计数是按这个窗口算的（默认近 24 小时），
+> 而窗口在界面上不可见时会出现自相矛盾的现象：某个工作负载 `eventCount: 0`、
+> `alertCount: 0`，**同时** `rootCause` 非空 —— 因为事件全在窗口之外。
+> 建议渲染为 `告警 0（统计窗口：最近 24h）`；窗口内为 0 但存在历史时显示
+> `0（窗口内）· 历史 N 条`。
+>
 > 容器属基础设施细节（看拓扑），Agent/Task 属更细粒度（看服务详情）。
+
+### 4.11 `GET /api/v1/metrics`（【已确认】新增，2026-09-30）
+
+**事件内指标的时间序列。** 用途：告警文案天然是时间序列语义（"延迟**飙升至** 800ms"、
+"显存**持续**上升"），而在此之前数值只作为事件的附属字段存在**单点快照**，
+界面无法判断是阶跃（配置变更）还是缓升（资源耗尽）。
+
+**边界（重要，勿误当成完整指标系统）**：
+
+- 点全部来自 `event.metrics`，因此**事件被保留策略清理后曲线会变短** ——
+  曲线与证据同生共死，不会出现"有曲线但没有证据"；
+- **不做聚合**（日均、P95）。算出来的数字没有对应的观测证据，而本项目拒绝输出
+  不可复算的结论；
+- **不引入 TSDB**（`ADR-0003`）：没有新存储、没有新写入路径、没有新依赖。
+
+**请求**（全部可选）：
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `resourceId` | string（可重复） | — | 资源 ID 过滤 |
+| `name` | string（可重复） | — | 指标名过滤 |
+| `from` / `to` | ISO8601 | — | 发生时间窗（闭区间）。**非法或倒置返回 400**，不静默忽略 |
+| `scanEvents` | int (1–2000) | 500 | 扫描的事件数上限 |
+
+**响应 `data`**：
+
+```json
+{
+  "series": [
+    {
+      "resourceId": "container:probe:...:ctr-0",
+      "name": "exitCode",
+      "unit": null,
+      "points": [{ "at": "2026-09-17T12:00:00+00:00", "value": 137.0 }],
+      "truncated": false
+    }
+  ],
+  "eventsScanned": 6,
+  "truncated": false,
+  "names": ["exitCode", "oomKilledCount"]
+}
+```
+
+**语义承诺**：
+
+| 行为 | 原因 |
+|---|---|
+| `unit` **恒为 `null`** | 事件契约不携带单位。从名称猜（`_pct` → `%`）在 `io_wait_pct` 上碰巧对、在 `value` 上就是编造。**界面显示裸数值** |
+| `points` 按时间**升序** | 曲线从左到右 |
+| 单序列点数上限 300，超出**保留最新**并置 `truncated: true` | 曲线右侧（当前状态）比左侧更值得看 |
+| **`truncated: true` 必须在界面上体现** | 一条"看起来完整其实被截断"的曲线会让人误判趋势平稳 |
+| 布尔值不出现在 series 中 | `{"oomKilled": true}` 是标志位，不是指标 |
+| 无数据返回 `200` + 空 `series` | "尚未接入探针"是正常状态，不是错误 |
+
+---
+
+### 4.12 `POST /api/v1/diagnoses/{id}/ticket`（【已确认】新增，2026-09-30）
+
+**把一条诊断渲染成可直接粘贴进工单系统的纯文本。** 用途对应赛题
+「告警运营与可用性 10%」（便于运维完成**定位和处置**）与
+「创新性与工程落地性 15%」（**生产落地价值**）。
+
+在此之前"处置建议"只是界面上几行文字，运维要手工把根因、证据、影响范围抄进工单系统；
+抄的过程会丢证据，而丢证据的工单在事后复盘时等于没有结论。
+
+**请求**：无请求体。
+
+**响应 `data`**：
+
+```json
+{
+  "diagnosisId": "diag_01M...",
+  "title": "[Crosslayer] 容器内存限额触顶（CONTAINER_MEMORY_LIMIT） · 置信度 0.90",
+  "text": "（多行纯文本，可直接粘贴）",
+  "rootCause": "CONTAINER_MEMORY_LIMIT",
+  "confidence": 0.9,
+  "actionable": true
+}
+```
+
+**语义承诺**：
+
+| 行为 | 原因 |
+|---|---|
+| **只读** | 不写库、不写回 ZSvirt、不执行任何处置动作。有测试断言"导出工单不改变诊断内容" |
+| `text` 由**纯函数**生成 | 同一诊断必然产出同一文本。工单要归档、被反复引用，两次不一样就失去证据价值 |
+| 置信度构成**逐项列出并给出合计** | 归档后仍可复算；引擎的合成调整行（`__conflict_penalty__` 等）标注「调整」 |
+| 证据行**始终打印 `source=`** | 工单会被后来的人当作事实引用，模拟数据与真实采集的证据价值不同 |
+| 资源同时给**可读名与原始 ID** | 前者便于人读，后者可追溯；缺名时回退到 ID，不编名字 |
+| `actionable: false`（`UNKNOWN` 或置信度 < 0.5）时正文**明说不可据此行动**并列出下一步 | 宁可说"不知道"，也不编一个看起来完整的工单。界面应据此走不同样式 |
+
+---
 
 ### 4.4 `GET /api/v1/events`
 
@@ -521,4 +652,5 @@ POST /api/v1/diagnoses
 |---|---|---|---|
 | v0.1 | 2026-09-16 | 首轮草案：通用约定、A→B 上报契约、B→C 查询契约、ZSvirt 适配待确认项 | DRAFT，待三方评审 |
 | v0.2 | 2026-09-16 | **Q1–Q7 全部关闭**（采纳成员 A 答复）：至少一次投递、`batchId` 幂等、5s/1MB 批量上限、env 配置、断网缓冲、可选 token；响应体新增 `resources[]` 逐条结果、`duplicate`、`serverTime`；新增 `sourceId` 生成规则 | 已确认 |
+| v0.4 | 2026-09-30 | **补记三处契约变化**（B 侧实现先行、契约后补，见下）：① 新增 `GET /api/v1/metrics`（事件内指标时间序列，不引入 TSDB）；② 新增 `POST /api/v1/diagnoses/{id}/ticket`（工单文本，只读）；③ `TopologyNode` 新增 `isStale`，并**修正 `staleness` 与 `observability` 的耦合**（原先只在非 active 时给出 ⇒ 后台标记默认关闭时该字段永久为空）；④ §4.3 补记 `WorkloadListData` 顶层 `gpuProviderMode` / `windowFrom` / `windowTo`（早已在返回，契约漏写）；⑤ 明确新字段在前端**一律声明为必需** | 已确认 |
 | v0.3 | 2026-09-17 | **Q8–Q14 全部关闭**（采纳成员 C 评审）：采纳 `/v1` 前缀、`/workloads` 定为 `ai_service` 聚合、首版纯轮询、拓扑上限 200/400、**新增 `POST`/`GET /api/v1/diagnoses` 与 `GET /api/v1/dict`**；修正 `status` 与观测状态字段歧义（§4.2.1）；`/api/health` 增补时钟漂移与 GPU provider 模式 | 已确认 |
