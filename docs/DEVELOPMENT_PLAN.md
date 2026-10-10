@@ -362,9 +362,9 @@ topology: 16 节点 / 15 边
 | 项 | 状态 |
 |---|---|
 | 上报契约（`API_CONTRACT.md` §3） | ✅ 已冻结，A 已确认 Q1–Q7 |
-| 脱敏规则一致性 | ✅ 由 `shared/sensitive_vectors.json` 保证；**A 侧有 2 条更松的规则**（见 `SENSITIVE_DATA.md` §8.2） |
-| **稳定样例数据** | ⬜ **待 A 提供** —— 任务 5 的 A→B 契约测试需要 |
-| 事件 `type` 覆盖确认 | ⬜ 待确认 17 项枚举 A 都能采到（尤其是 `inference.*` / `agent.*`，见 X-08） |
+| 脱敏规则一致性 | ✅ 由 `shared/sensitive_vectors.json` 保证；**两侧已完全等价**（A 在 PR #1 补齐裸字段名全等匹配，递归本无差异，见 `SENSITIVE_DATA.md` §8.2） |
+| **稳定样例数据** | ✅ **已交付**（`agents/probe/fixtures/`，4 场景；B 任务 6 的 `test_agent_fixtures.py` 已消费） |
+| 事件 `type` 覆盖确认 | ✅ **已交付**（`agents/docs/EVENT_COVERAGE.md`，17 项逐项确认；`inference.*`/`agent.*` 的**真实采集**仍待 X-08） |
 
 ### 4.2 B → C（成员 B 提供）
 
