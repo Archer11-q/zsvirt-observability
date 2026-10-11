@@ -127,6 +127,43 @@ curl -s 'localhost:8080/api/v1/topology?depth=8' \
 | `health` 报 `mode=auto` | 没走 `--demo` 基线 | 用 `./deploy/start.sh --demo` 重启 |
 | `inject_fault.sh` 说服务不可达 | 服务没起来或不在 8080 | 先 `curl localhost:8080/api/health` |
 
+### 进阶：让「容器/进程异常」用**真实**容器而不是模拟载荷
+
+上面 §4 注入的是 B 按契约**构造**的载荷（证据 `source=simulated`）。
+如果时间允许，让评委看到**真容器真的被 OOM Killer 杀掉**会更有说服力：
+
+```bash
+# 终端 C：起一个真容器（CPU 可跑的真实 Transformer 推理服务）
+docker compose -f deploy/sample-workload/compose.yaml --profile starved up -d --force-recreate
+
+# 终端 B：真采集（驱动成员 A 的探针采集器，走容器运行时 API）
+python3 deploy/sample-workload/collect_real_events.py --watch 5
+```
+
+预期屏幕上出现：
+
+```text
+container.oom_killed  critical  容器 demo-inference-starved 被 OOM Killer 终止
+└─ 指标 {"exitCode": 137, "container_memory_limit_bytes": 536870912, "oomKilledCount": 8}
+```
+
+Crosslayer 侧：告警 `R-CTR-OOM-010` firing，根因 `CONTAINER_MEMORY_LIMIT` 置信 **0.9**，
+证据 `source=probe`（**真实采集**，不是 `simulated`）。
+
+讲这一段的台词：
+
+> "刚才那三条告警的证据是我们按契约构造的，标着 `simulated`。
+> 这一段换成真容器：这个推理服务被 512 MB 的限额压死了，`OOMKilled=true`、
+> 退出码 137、重启了 8 次 —— 全部来自容器运行时 API 的真实读数。
+> 根因和置信度跟模拟路径给出的**一样**，区别只在证据是不是真的发生过。"
+
+⚠️ **两条必须如实说明**：
+
+1. 成员 A 的容器采集器目前采不到容器事件（四条缺陷，见
+   [`PROBE_DEFECT_SYNC.md`](PROBE_DEFECT_SYNC.md)），所以现在要先经
+   `collect_real_events.py` 的桥接层绕过去；
+2. **GPU 显存那两类仍然是模拟** —— 本机没有 NVIDIA 设备，这一点不要含糊过去。
+
 ### 明确不要做的事
 
 - **不要说"这是真实 GPU 数据"**。想讲的是关联与推理能力，不是硬件。

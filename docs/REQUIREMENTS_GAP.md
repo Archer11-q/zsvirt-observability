@@ -21,8 +21,8 @@
 | a | 方案说明文档 | ✅ **完成** | `docs/` 全量（见 §2） |
 | b | 可运行原型（Web 控制台，≥4 项能力） | ✅ **完成** | `backend/`、`frontend/`、`deploy/start.sh` |
 | c | 虚拟机内探针 / 采集组件 | ✅ **完成** | `agents/`（含开销、权限、卸载说明） |
-| d | 样例 AI 工作负载（VM 内容器化负载 + 完整配置） | 🔶 **配置完成，未在 ZSvirt VM 内实跑** | `deploy/sample-workload/` |
-| e | 三类故障场景与证据 | 🔶 **三类全部实现且可复现；证据来自模拟 / 回放渠道** | `backend/app/zsvirt/scenarios.py`、`docs/backend/DIAGNOSIS_DESIGN.md` §5 |
+| d | 样例 AI 工作负载 | 🔶 **配置完成 + 已在开发机上真实跑通；未在 ZSvirt VM 内实跑** | `deploy/sample-workload/` |
+| e | 三类故障场景与证据 | 🔶 **三类全部实现；「容器/进程异常」已用真实容器跑通，另两类仍为模拟** | `backend/app/zsvirt/scenarios.py`、`deploy/sample-workload/collect_real_events.py` |
 | f | 可复现材料 | ✅ **完成** | 见 §4 |
 | g | 真实环境 3–5 分钟演示视频 | ⛔ **未产出** | 脚本就绪：`docs/DEMO_SCRIPT.md` |
 
@@ -77,18 +77,37 @@
 
 ---
 
-## 5. d. 样例 AI 工作负载 —— 🔶 配置完成，未在 ZSvirt VM 内实跑
+## 5. d. 样例 AI 工作负载 —— 🔶 开发机已真实跑通，未在 ZSvirt VM 内实跑
 
-**已交付**（`deploy/sample-workload/`）：
+**已完成，且已在开发机上真实跑通**（`deploy/sample-workload/`）：
 
 | 文件 | 内容 |
 |---|---|
-| `Dockerfile.inference` | 可 CPU 运行的推理服务镜像（不依赖 GPU 也能启动） |
-| `compose.yaml` | 两个 profile：`normal`（2 GiB 限额）与 `starved`（512 MiB 限额）—— **故障旋钮就是显存 / 内存限额本身** |
-| `loadgen.sh` | 负载生成器：`steady` / `burst` / `broken` 三种节奏 |
-| `README.md` | 逐个命令的跑法与"该看到什么" |
+| `Dockerfile.inference` | CPU 可跑的推理服务镜像；模型构建期下载并 **SHA256 校验**后固化 |
+| `bake_model.py` | 模型固化与校验（校验失败即构建失败，不让"权重悄悄变了"混过去） |
+| `serve.py` | 真实预训练 Transformer（DistilBERT / SST-2，ONNX 量化版）推理服务 |
+| `compose.yaml` | 两个 profile：`normal`（2 GiB）/ `starved`（512 MiB）——**故障旋钮就是内存限额** |
+| `loadgen.sh` | 负载生成器：`steady` / `burst` / `broken` |
+| `collect_real_events.py` | 驱动成员 A 的探针采集器，把**真实**容器故障上报到 Crosslayer |
+| `README.md` | 逐个命令的跑法、实测数据与诚实边界 |
 
-**缺口**：没有在命题方的 ZSvirt 虚拟机里实际运行过。
+**实测记录（2026-09-30，开发机 Docker）**：
+
+| 项 | 结果 |
+|---|---|
+| 推理真实性 | `{"label":"POSITIVE","score":0.999,"tokens":14,"elapsed_seconds":0.012}` —— 真实 Transformer 前向 |
+| 健康 profile 内存 | RSS 739 MB（限额 2 GiB） |
+| 故障注入 | `OOMKilled=true` / `ExitCode=137` / `RestartCount` 递增 / `MemSwap==MemLimit`（已禁用 swap） |
+| 事件流 | `oom → die(exitCode=137)` 反复出现 |
+| Crosslayer 结论 | 告警 `R-CTR-OOM-010` firing；根因 `CONTAINER_MEMORY_LIMIT` 置信 **0.9**；建议 `INCREASE_CONTAINER_MEMORY`；证据 `source=probe` |
+
+**一次实测驱动的技术栈修正**：本目录最早的版本写的是 `pip install vllm==0.8.5`。
+实测该版本在 PyPI 上只有 **CUDA wheel**，无 GPU 时 `import vllm` 失败；
+而 `torch` 的 CPU 索引虽然可达，wheel 实际落在 `download-r2.pytorch.org`，
+容器内**网络不可达**。也就是说那份配置的注释写着"CPU 可跑"，实际在演示机上跑不起来
+—— 正是本项目一直在防的那类缺陷。现改为 ONNX Runtime + 预训练 ONNX，依赖从数 GB 降到约 90 MB。
+
+**缺口**：没有在命题方的 **ZSvirt 虚拟机**里实际运行过（开发机上已跑通）。
 
 | 原因 | 性质 |
 |---|---|
@@ -105,7 +124,7 @@
 2. 平台层资源（host / gpu / vgpu）仍是代为上报 —— `vGPU → VM → 容器` 这一段的
    真实 ID 桥接待 **X-09**（见 §8）。
 
-## 6. e. 三类故障场景与证据 —— 🔶 全部实现，证据来源是模拟 / 回放
+## 6. e. 三类故障场景与证据 —— 🔶 一类已用真实容器跑通，两类仍是模拟
 
 赛题规定的三类场景**全部实现且逐类给出四项产物**（告警、关联证据、影响范围、处置建议）：
 
@@ -120,7 +139,13 @@
 复现方式：`./deploy/start.sh --replay`（一键打印全部场景报告），
 测试侧见 `tests/test_multi_scenario.py`、`tests/test_cross_layer.py`。
 
-**缺口**：证据来自**模拟 GPU 渠道与探针样例回放**，不是命题方环境里的真实注入。
+**已升级的一项**（2026-09-30）：**「容器/进程异常」这一类现在是真实证据** ——
+`deploy/sample-workload/` 里真的跑着一个容器化推理服务，真的被 512 MiB 限额压死，
+真的 `OOMKilled`，由成员 A 的采集器（经桥接层绕开其四条缺陷）从容器运行时 API
+读到并上报，Crosslayer 给出 `CONTAINER_MEMORY_LIMIT`（置信 0.9）与处置建议。
+与模拟演示路径的结论**一致**，区别只在证据来源：`probe`（真实）而非 `simulated`。
+
+**剩余缺口**：另外两类（GPU 或资源瓶颈、应用/Agent 任务异常）**仍是模拟 / 回放**。
 
 | 原因 | 性质 |
 |---|---|
@@ -165,6 +190,8 @@
 | 3 | `GuestSmiProvider` 未实现 | VM 内 `nvidia-smi` 渠道缺失 | **X-04**：GPU 为**直通**（非 MDEV），归因能力受限；VM 内能否 `nvidia-smi` 始终未获答复 |
 | 4 | **告警类证据的来源恒为 `probe`** | `EvidenceKind.ALERT` 的证据无法标注渠道 | 已知。本次只修了**事件**证据的来源映射（见下），告警证据留待后续 |
 | 5 | `shared` 作用域的推荐文案自相矛盾 | 标为 `shared`（非自身问题）的行，推荐文案仍写「本机超配」 | **用户明确决定不改**，记录在案 |
+| 6 | 🔴 **成员 A 的容器采集器采不到任何容器事件** | `container.oom_killed` / `container.restart` 在真实采集路径上是**死数据**；赛题三类场景里的「容器/进程异常」在真实部署下无法演出来 | **四条独立缺陷叠加，全部被静默吞掉**（详见 [`PROBE_DEFECT_SYNC.md`](PROBE_DEFECT_SYNC.md)）。已在桥接层绕过以跑通场景，**修正需由成员 A 落到 `agents/probe/collector/container.py`** |
+| 7 | 桥接层承担了三处本该在探针里的修正 | 真实部署走 socket，桥接层不在链路上 —— 换句话说**修好之前，真实部署仍然采不到容器事件** | 同上。桥接层那三段的**存在本身就是待办事项** |
 
 > 第 4 条的背景：`EvidenceSource.SIMULATED` 与 `DiagnosisEvidence.source` 字段
 > 一直存在，但 2026-09-30 实测发现**从来没有任何真实数据流填过它** ——
@@ -184,6 +211,7 @@
 | ZWatch 响应字段样例（X-12） | 适配器的单一假设可被验证 | 命题方 |
 | 一名能录音的录制者 | g 的视频产出 | 队伍 |
 | 自有 Ubuntu（**已具备**） | 容器 / 网络类真实故障注入；GPU 类仍为模拟 | 队伍 |
+| 成员 A 修掉容器采集器的四条缺陷 | 真实部署下「容器/进程异常」场景可用 | 成员 A |
 
 ---
 
@@ -191,4 +219,5 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.1 | 2026-09-30 | **实测更新**：d 在开发机上真实跑通（真容器 / 真 OOM / 真采集）；e 的「容器/进程异常」升级为真实证据；技术栈由 vLLM 改为 ONNX Runtime（实测 vLLM 无 GPU 不可用）；新增缺口 6/7（成员 A 容器采集器四条缺陷）|
 | v1.0 | 2026-09-30 | 首版：a–g 逐项覆盖、d/e/g 缺口与原因、5 项记录在案的实现缺口、补齐路径 |

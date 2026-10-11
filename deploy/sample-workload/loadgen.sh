@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # 样例 AI 工作负载的负载生成器（赛题交付要求 d / e 的配套件）
 #
 # ## 为什么必须有它
@@ -32,9 +32,9 @@ request() {
   # 一个"永远等下去"的压测工具会掩盖超时故障，而超时正是要观测的信号之一。
   curl -sS -o /dev/null -w '%{http_code} %{time_total}s\n' \
     --max-time "${TIMEOUT:-30}" \
-    -X POST "${TARGET}/v1/completions" \
+    -X POST "${TARGET}/v1/infer" \
     -H 'content-type: application/json' \
-    -d "{\"model\":\"${MODEL:-Qwen/Qwen2.5-0.5B-Instruct}\",\"prompt\":\"${PROMPT}\",\"max_tokens\":32}" \
+    -d "{\"text\":\"${PROMPT}\"}" \
     2>&1 || echo "000 timeout/conn-error"
 }
 
@@ -70,7 +70,7 @@ case "${MODE}" in
     for i in $(seq 1 "${COUNT:-10}"); do
       printf '%3d  ' "$i"
       curl -sS -o /dev/null -w '%{http_code} %{time_total}s\n' \
-        --max-time 3 "${BROKEN_TARGET:-http://127.0.0.1:9}/v1/completions" \
+        --max-time 3 "${BROKEN_TARGET:-http://127.0.0.1:9}/v1/infer" \
         2>&1 || echo "connection-refused"
       sleep 1
     done
@@ -86,7 +86,7 @@ case "${MODE}" in
 
 通用 env：
   TARGET   推理服务地址（默认 http://127.0.0.1:8000）
-  MODEL    模型名（须与容器内 MODEL_NAME 一致）
+  TEXT     推理请求的文本
   TIMEOUT  单请求超时秒数（默认 30，**超时会被记录而不是被吞掉**）
 USAGE
     exit 2

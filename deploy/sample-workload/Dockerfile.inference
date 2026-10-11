@@ -5,72 +5,94 @@
 # 赛题交付要求 d：「在虚拟机中运行至少一种容器化 AI 工作负载，例如模型推理服务、
 # RAG 应用、Agent 服务或批处理任务；**提供完整配置**」。
 #
-# 本项目选**模型推理服务**，理由是它天然产生本平台要观测的三类信号：
+# 本项目选**模型推理服务**，理由是它天然产生本平台要观测的三层信号：
 #   - 容器层：内存/CPU 限额、OOM、重启
-#   - 进程层：vLLM worker 的 I/O 等待、崩溃
-#   - 服务层：推理错误、超时、并发与 QPS
+#   - 进程层：崩溃、I/O 等待
+#   - 服务层：推理错误、超时、延迟与并发
 # 而这三层正是赛题三类故障场景（容器/进程异常、GPU 或资源瓶颈、应用/Agent 异常）的载体。
 #
-# ## 为什么默认不装 GPU
+# ## 技术栈为什么是 ONNX Runtime —— 一次实测驱动的修正
 #
-# 演示机通常没有 GPU（`docs/DEMO_SCRIPT.md` 开头即声明这一点）。
-# 因此**默认配置是 CPU 可跑的极小模型**，GPU 是可选叠加。
-# 这让"缺 GPU 也能复现实验流程"（赛题明文要求）成为默认路径，而不是一句声明。
+# ⚠️ 本文件最早的版本写的是 `pip install vllm==0.8.5`。实测结论：
 #
-# ## 用法
+#   | 渠道 | 无 GPU 机器上的可用性 |
+#   |---|---|
+#   | `vllm`（PyPI） | ❌ 只有 CUDA wheel（`...manylinux1_x86_64.whl`，311 MB，依赖整套 `nvidia-*`） |
+#   | `torch`（PyPI） | ⚠️ CUDA 构建，约 766 MB + 数 GB `nvidia-*` |
+#   | `torch`（`download.pytorch.org/whl/cpu`） | ❌ 索引可达，但 wheel 落在 `download-r2.pytorch.org`，**容器内网络不可达** |
+#   | **`onnxruntime` + 预训练 ONNX** | ✅ 约 15 MB，纯 CPU，PyPI 可达 |
 #
-#   docker build -t crosslayer/demo-inference:1.0 .
-#   docker run -d --name demo-inference \
-#     --memory=2g --memory-swap=2g \
-#     -p 8000:8000 \
-#     -v "$PWD/logs:/var/log/inference" \
-#     crosslayer/demo-inference:1.0
+# 赛题明文要求「缺特定 GPU 硬件时也能复现实验流程」，所以默认路径必须**确定可跑**。
+# 选 ONNX Runtime 不是降级：它是同一个预训练模型（DistilBERT / SST-2）的另一个
+# 推理后端。有 GPU 的 VM 上换成 vLLM 即可，对外观测接口不变。
 #
-# 有 GPU 的机器加 `--gpus all`，并把 MODEL_NAME 换成更大的模型。
-# 备选：直接用官方镜像 `vllm/vllm-openai:latest`（体积大但省事），
-# 见 `compose.yaml` 里注释掉的另一种写法。
+# ## 故障旋钮 = 内存限额（完整跑法见同目录 `README.md`）
+#
+# 三类场景里的两类不需要任何特殊注入工具，只要把限额压到负载真实需求之下：
+#
+#   | 场景 | 注入方式 | 观测到的信号 |
+#   |---|---|---|
+#   | 容器/进程异常 | `mem_limit` 512m，而 `KV_CACHE_MB=1200` | OOMKilled / exitCode 137 / 反复重启 |
+#   | GPU 或资源瓶颈 | 无 GPU 时用 CPU 限额 + 高并发 | 延迟上升、进程 I/O 等待 |
+#   | 应用/Agent 异常 | 停掉服务后仍继续发请求 | 连接被拒 / 推理超时 |
+#
+# 因此提供两个 profile：`normal`（健康基线）与 `starved`（受限）。
+# 切换 profile 即切换故障场景，不依赖任何外部注入工具。
 
 FROM python:3.12-slim
 
-# 探针要读容器信息（cgroup / /proc），所以这些工具在镜像里可用会让观测更简单；
-# 不装也能跑（探针只需要 /proc，不需要容器内工具）。
+# 探针要读容器信息（cgroup / /proc），镜像里有这些工具会让观测与人工核对都更简单。
+# 不装也能跑（探针只需要 `/proc`），所以这不是硬依赖。
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       curl procps ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
+# ---- 运行时环境变量（必须在下面的 RUN 之前声明）----
+#
+# `HF_ENDPOINT` 默认指向官方 HuggingFace。**受限网络**下（huggingface.co 不可达）
+# 用构建参数切到可信镜像，例如：
+#   docker compose build --build-arg HF_ENDPOINT=https://hf-mirror.com
+# 刻意把镜像地址做成参数而不是硬编码：交付物不应把某地的网络绕行方案固化进去，
+# 否则换一个评测环境反而构建不起来 —— 那正是"可复现性"要防的事。
+ARG HF_ENDPOINT="https://huggingface.co"
+ENV MODEL_DIR="/models/local" \
+    VLLM_PORT=8000 \
+    INFERENCE_LOG_DIR="/var/log/inference"
+
 WORKDIR /app
 
-# 固定版本：演示要可复现（`ADR-0003`），浮动版本会让"同一场景两次结果不同"。
-# CPU 版 vLLM 较重，因此拆一层便于缓存；也可换 `transformers` + `fastapi` 的最小自建服务。
+# ---- 依赖：全部来自 PyPI，纯 CPU ----
+#
+# 固定精确版本：演示要可复现（`ADR-0003`），浮动版本会让"同一场景两次结果不同"。
+# 这里**不需要 torch / transformers** —— 预训练好的 ONNX 模型 + 独立分词器
+# 就够跑完整前向，依赖体积从数 GB 降到约 90 MB。
 RUN pip install --no-cache-dir \
-      "vllm==0.8.5" \
+      "onnxruntime==1.20.1" \
+      "tokenizers==0.20.3" \
+      "numpy==2.1.3" \
       "fastapi==0.141.1" \
       "uvicorn[standard]==0.53.0"
 
-# 极小模型：CPU 也能在秒级加载，适合演示与压力注入。
-# 生产/GPU 场景换成更大的模型即可（例如 Qwen2.5-7B-Instruct）。
-ENV MODEL_NAME="Qwen/Qwen2.5-0.5B-Instruct" \
-    VLLM_PORT=8000 \
-    HF_HOME=/models
-
-# 日志落在固定路径 —— 成员 A 的探针按路径采集 `inference.*` 事件，
-# 路径约定见 `agents/docs/EVENT_COVERAGE.md`（X-08 待命题方给规范）。
-ENV INFERENCE_LOG_DIR=/var/log/inference
-RUN mkdir -p "${INFERENCE_LOG_DIR}" "${HF_HOME}"
+# ---- 把模型烘进镜像（下载 + SHA256 校验）----
+#
+# 构建期取模型、而不是运行时下载，有两个理由：
+#   1. 演示/评测环境可能没有外网，运行时下载会让"缺 GPU 也能复现"变成一句空话；
+#   2. 同一镜像 tag 两次运行行为一致（赛题「稳定性与可复现性 15%」）。
+# 校验失败会让**构建失败**：模型是外部输入，权重悄悄变了而没人知道，
+# 会让"这次和上次的延迟可比较"变成假话。见 `bake_model.py`。
+COPY bake_model.py /app/bake_model.py
+RUN mkdir -p "${MODEL_DIR}" "${INFERENCE_LOG_DIR}" \
+ && python /app/bake_model.py "${MODEL_DIR}" --endpoint "${HF_ENDPOINT}"
 
 EXPOSE 8000
 
-# 健康检查用推理服务自己的端点：容器"活着"不等于"能推理"，
-# 而本平台要观测的正是后者。
-HEALTHCHECK --interval=15s --timeout=5s --start-period=120s --retries=5 \
+# 健康检查用服务自己的端点：容器"活着"不等于"能推理"，而本平台要观测的正是后者。
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
   CMD curl -fsS "http://127.0.0.1:${VLLM_PORT}/health" || exit 1
 
-# `--max-model-len` 压小是为了让 CPU 演示也能在演示时长内响应；
-# `--swap-space 0` 避免把显存问题掩盖成内存交换。
-CMD ["sh", "-c", "exec python -m vllm.entrypoints.openai.api_server \
-      --model \"${MODEL_NAME}\" \
-      --host 0.0.0.0 \
-      --port \"${VLLM_PORT}\" \
-      --max-model-len 2048 \
-      --disable-log-requests 2>&1 | tee -a \"${INFERENCE_LOG_DIR}/server.log\""]
+COPY serve.py /app/serve.py
+
+# `python -u` 是刻意的：被 OOM Killer SIGKILL 的进程不会 flush 缓冲区，
+# 无缓冲输出才能保证"它死在哪一步"留在日志里。
+CMD ["python", "-u", "/app/serve.py"]
