@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="overlay.css" />
+<title>Crosslayer 演示包装层</title>
+</head>
+<body>
+<div id="stage"></div>
+
+<script>
+/* ============================================================================
+ * 包装层的帧时钟
+ *
+ * ## 为什么不做 CSS animation
+ *
+ * CSS 动画按**墙上时钟**推进，而逐帧渲染需要"给我第 t 秒的画面"。用 CSS 动画
+ * 就得靠延时对齐，一帧抖动就会串味，而且渲染速度会直接影响成片 —— 同一份代码
+ * 在快机器和慢机器上出两种片子。
+ *
+ * 所以这里把每个镜头写成**时间的纯函数** `__frame(t)`：
+ * 给定 t 就能算出那一刻的全部样式，与渲染快慢、与是否重跑完全无关。
+ * 这就是 video-shotcraft 的"确定性渲染"原则（禁 Date.now / 禁随机）。
+ * ========================================================================== */
+
+const EASE = {
+  outCubic: (x) => 1 - Math.pow(1 - x, 3),
+  inOutCubic: (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2),
+  outQuint: (x) => 1 - Math.pow(1 - x, 5),
+};
+
+/** 把 t 映射到 [0,1] 的进度，并夹紧。 */
+const seg = (t, from, dur) => Math.min(Math.max((t - from) / dur, 0), 1);
+
+/** 极简行内标记：`代码` → 等宽强调；**加粗** → 强调；<small> → 注脚字号。
+ *
+ * 只支持这三种，且顺序固定：先处理反引号（它的内容里可能含 `*`），
+ * 再处理加粗，最后把 `<small>` 换成语义化的 class。
+ * 不引入 markdown 解析器 —— 字幕里出现的标记是**我们自己在 timeline.json 里写的**，
+ * 不是用户输入，一个 12 行的转换足够，多一个依赖不划算。 */
+function fmt(text) {
+  return String(text ?? "")
+    .replace(/`([^`]+)`/g, '<span class="caption__code">$1</span>')
+    .replace(/\*\*([^*]+)\*\*/g, '<span class="caption__strong">$1</span>')
+    .replace(/<small>([\s\S]*?)<\/small>/g, '<span class="caption__note">$1</span>');
+}
+
+const STAGE = document.getElementById("stage");
+const CFG = { kind: "badge", params: {} };
+let el = {};
+
+/* ---------------------------------------------------------------- 各镜头的构建 */
+
+function buildTitle(p) {
+  STAGE.innerHTML = `
+    <div class="card">
+      <div class="card__inner">
+        <h1 class="wordmark">Cross<span class="wordmark__tail">layer</span></h1>
+        <p class="tagline">${p.tagline ?? ""}</p>
+        <div class="meta">
+          <div class="meta__row">${p.meta1 ?? ""}</div>
+          <div class="meta__row">${p.meta2 ?? ""}</div>
+        </div>
+      </div>
+    </div>`;
+  el = {
+    wordmark: STAGE.querySelector(".wordmark"),
+    tagline: STAGE.querySelector(".tagline"),
+    meta: STAGE.querySelector(".meta"),
+  };
+}
+
+function buildSection(p) {
+  const rails = [1, 2, 3, 4, 5]
+    .map((i) => `<div class="rail__dot${String(i) === String(p.n) ? " rail__dot--on" : ""}"></div>`)
+    .join("");
+  STAGE.innerHTML = `
+    <div class="section">
+      <div class="card__inner">
+        <p class="section__num">${p.num ?? ""}</p>
+        <h2 class="section__title">${p.title ?? ""}</h2>
+        <p class="section__sub">${fmt(p.sub ?? "")}</p>
+      </div>
+      <div class="rail">${rails}</div>
+    </div>`;
+  el = {
+    num: STAGE.querySelector(".section__num"),
+    title: STAGE.querySelector(".section__title"),
+    sub: STAGE.querySelector(".section__sub"),
+    rail: STAGE.querySelector(".rail"),
+  };
+}
+
+function buildOutro(p) {
+  STAGE.innerHTML = `
+    <div class="card">
+      <div class="card__inner">
+        <div class="lockup">
+          <h1 class="wordmark">Cross<span class="wordmark__tail">layer</span></h1>
+          <div class="stack">${(p.stack ?? []).map((s) => `<div>${fmt(s)}</div>`).join("")}</div>
+        </div>
+        <div class="meta"><div class="meta__row">${p.meta1 ?? ""}</div></div>
+      </div>
+    </div>`;
+  el = { wordmark: STAGE.querySelector(".wordmark"), stack: STAGE.querySelector(".stack"), meta: STAGE.querySelector(".meta") };
+}
+
+function buildBadge(p) {
+  const rows = (p.rows ?? [])
+    .map(
+      (r) => `<div class="badge__row">
+        <span class="badge__dot badge__dot--${r.tone}"></span>
+        <span class="badge__kind">${r.kind}</span>
+        <span class="badge__val">${r.value}</span>
+      </div>`
+    )
+    .join("");
+  STAGE.innerHTML = `<div class="badge"><p class="badge__title">${p.title ?? "证据来源"}</p>${rows}</div>`;
+  el = { badge: STAGE.querySelector(".badge") };
+}
+
+function buildCaption(p) {
+  STAGE.innerHTML = `<div class="caption${p.key ? " caption--key" : ""}"><p class="caption__text">${fmt(p.text ?? "")}</p></div>`;
+  el = { caption: STAGE.querySelector(".caption") };
+}
+
+function buildFlash() {
+  STAGE.innerHTML = `<div class="flash"></div>`;
+  el = { flash: STAGE.querySelector(".flash") };
+}
+
+function buildStats(p) {
+  const items = (p.items ?? [])
+    .map(
+      (s) =>
+        `<div class="stat${s.tone ? " stat--" + s.tone : ""}">` +
+        `<span class="stat__label">${s.label}</span><span class="stat__value">${s.value}</span></div>`
+    )
+    .join("");
+  STAGE.innerHTML = `<div class="stats">${items}</div>`;
+  el = { stats: STAGE.querySelectorAll(".stat") };
+}
+
+const BUILDERS = {
+  title: buildTitle,
+  section: buildSection,
+  outro: buildOutro,
+  badge: buildBadge,
+  caption: buildCaption,
+  flash: buildFlash,
+  stats: buildStats,
+};
+
+/* 每个镜头的时长（秒）。渲染脚本按它决定要出多少帧。 */
+const DURATIONS = {
+  title: 4.0,
+  section: 2.6,
+  outro: 3.0,
+  badge: 0.2,
+  caption: 0.6,
+  flash: 0.45,
+  stats: 0.9,
+};
+
+/* ---------------------------------------------------------------- 各镜头的帧函数 */
+
+function frameTitle(t) {
+  const ls = 26 - 20 * EASE.outCubic(seg(t, 0, 0.9));
+  el.wordmark.style.letterSpacing = ls.toFixed(2) + "px";
+  el.wordmark.style.opacity = seg(t, 0, 0.45).toFixed(3);
+
+  const tg = seg(t, 0.35, 0.5);
+  el.tagline.style.opacity = tg.toFixed(3);
+  el.tagline.style.transform = `translateY(${(18 * (1 - EASE.outCubic(tg))).toFixed(2)}px)`;
+
+  const mt = seg(t, 0.7, 0.5);
+  el.meta.style.opacity = mt.toFixed(3);
+  el.meta.style.transform = `translateY(${(14 * (1 - EASE.outCubic(mt))).toFixed(2)}px)`;
+}
+
+function frameSection(t) {
+  const rows = [
+    [el.num, 0.0],
+    [el.title, 0.12],
+    [el.sub, 0.26],
+  ];
+  for (const [node, delay] of rows) {
+    const k = seg(t, delay, 0.5);
+    node.style.opacity = k.toFixed(3);
+    node.style.transform = `translateX(${(-26 * (1 - EASE.outCubic(k))).toFixed(2)}px)`;
+  }
+  el.rail.style.opacity = seg(t, 0.4, 0.4).toFixed(3);
+}
+
+function frameOutro(t) {
+  /* 字标收缩归位：这正是 storyboard 里 logo-shrink-wordmark-lockup 的动作 ——
+     品牌物料在片尾收束，与片头的"展开"呼应而不是重复。 */
+  const k = EASE.outCubic(seg(t, 0, 0.8));
+  el.wordmark.style.transform = `scale(${(1.28 - 0.28 * k).toFixed(4)})`;
+  el.wordmark.style.transformOrigin = "left bottom";
+  el.wordmark.style.opacity = seg(t, 0, 0.4).toFixed(3);
+
+  const s = seg(t, 0.3, 0.5);
+  el.stack.style.opacity = s.toFixed(3);
+  el.stack.style.transform = `translateY(${(16 * (1 - EASE.outCubic(s))).toFixed(2)}px)`;
+  el.meta.style.opacity = seg(t, 0.55, 0.4).toFixed(3);
+}
+
+function frameBadge(t) {
+  /* 角标**不做入场动画**，恒定不透明。
+   *
+   * 这里踩过一个很隐蔽的坑：一开始写的是 `opacity = 0.96 * seg(t, 0, 0.2)`，
+   * 想淡入。但合成阶段是拿**单张 PNG** 当静态图层用的，而序列的第 0 帧
+   * 恰好 opacity=0 —— 于是角标在成片里**整段都不存在**，而每一步都不报错。
+   *
+   * 教训：一个"静态图层"的素材，它的第 0 帧必须就是**它自己**。
+   * 想给常驻元素做入场动画，就得让合成阶段去用序列而不是单帧 ——
+   * 这里的判断是：常驻角标本来就不该有入场动画（它要"一直在那儿"）。
+   */
+  el.badge.style.opacity = "0.96";
+}
+
+function frameCaption(t) {
+  const k = seg(t, 0, 0.25);
+  el.caption.style.opacity = k.toFixed(3);
+  el.caption.style.transform = `translateX(-50%) translateY(${(10 * (1 - k)).toFixed(2)}px)`;
+}
+
+function frameFlash(t) {
+  /* 一次白闪：0.12s 起、0.45s 落。全片只允许出现一次（storyboard ③ 号镜）。 */
+  const rise = seg(t, 0, 0.12);
+  const fall = seg(t, 0.12, 0.33);
+  el.flash.style.opacity = (EASE.outQuint(rise) * (1 - EASE.inOutCubic(fall))).toFixed(3);
+}
+
+function frameStats(t) {
+  el.stats.forEach((node, i) => {
+    const k = seg(t, i * 0.14, 0.45);
+    node.style.opacity = k.toFixed(3);
+    node.style.transform = `translateX(${(22 * (1 - EASE.outCubic(k))).toFixed(2)}px)`;
+  });
+}
+
+const FRAMES = {
+  title: frameTitle,
+  section: frameSection,
+  outro: frameOutro,
+  badge: frameBadge,
+  caption: frameCaption,
+  flash: frameFlash,
+  stats: frameStats,
+};
+
+/* ---------------------------------------------------------------- 渲染脚本的入口 */
+
+window.__setup = (cfg) => {
+  CFG.kind = cfg.kind;
+  CFG.params = cfg.params || {};
+  (BUILDERS[CFG.kind] || buildBadge)(CFG.params);
+  window.__frame(0);
+  return { duration: DURATIONS[CFG.kind] ?? 1.0 };
+};
+
+window.__frame = (t) => {
+  (FRAMES[CFG.kind] || frameBadge)(t);
+};
+</script>
+</body>
+</html>

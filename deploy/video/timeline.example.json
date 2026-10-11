@@ -1,0 +1,254 @@
+{
+  "_说明": [
+    "这是演示视频的**唯一配置源**：render.mjs 读它渲包装层，compose.mjs 读它剪接合成。",
+    "录制完成后你只需要改两处：recording 指向你的录屏文件，以及每个 clip 的 source.in / source.out。",
+    "所有时间单位是秒。clip.source 里的时间轴 = 你那段原始录屏的时间轴（不是成片时间轴）。",
+    "分段卡的文案与字幕都在这里，改文案不用碰 HTML/JS —— 这也是为什么它值得单独一个文件。",
+    "overlay 的两个时间概念：from/to = 图层可见区间（秒，录屏时间轴）；animSeconds = 入场动画长度。"
+  ],
+
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+
+  "recording": "raw/recording.mp4",
+
+  "_常驻来源角标": [
+    "官方答复第 13 条要求「在采集记录、API 响应、界面、诊断证据和视频中一致标明来源，",
+    "并区分真实采集、真实数据回放和人工模拟」。这几行就是那个要求的落地，",
+    "改它们之前先确认你有依据说不同的话。"
+  ],
+  "badge": {
+    "title": "证据来源",
+    "rows": [
+      { "tone": "real", "kind": "容器事件", "value": "probe（真实采集）" },
+      { "tone": "proxy", "kind": "平台层", "value": "代为上报（X-09）" },
+      { "tone": "sim", "kind": "GPU 指标", "value": "simulated（模拟）" }
+    ]
+  },
+
+  "clips": [
+    {
+      "id": "open",
+      "card": {
+        "kind": "title",
+        "seconds": 4.0,
+        "params": {
+          "tagline": "面向 ZSvirt 虚拟机内 AI 工作负载的跨层可观测与根因诊断平台",
+          "meta1": "宿主机 → GPU / vGPU → VM → 容器 → AI 服务 / Agent",
+          "meta2": "演示环境：开发机 Ubuntu（Docker Desktop WSL2）"
+        }
+      },
+      "title": "片头"
+    },
+    {
+      "id": "deploy",
+      "card": {
+        "kind": "section",
+        "seconds": 2.6,
+        "params": {
+          "n": "1",
+          "num": "① 部署",
+          "title": "一条命令起服务",
+          "sub": "`./deploy/start.sh --demo`　迁移 → 启动 → 健康检查全绿"
+        }
+      },
+      "source": { "in": 0.0, "out": 26.0 },
+      "overlays": [
+        {
+          "id": "cap-deploy",
+          "kind": "caption",
+          "from": 0.0,
+          "to": 26.0,
+          "params": { "text": "演示基线：SIMULATED_DATA_ENABLED=true　GPU_PROVIDER=simulated　ALERT_RECOVERY_AFTER_SEC=0" }
+        }
+      ],
+      "title": "① 部署"
+    },
+    {
+      "id": "observe",
+      "card": {
+        "kind": "section",
+        "seconds": 2.6,
+        "params": {
+          "n": "2",
+          "num": "② 正常观测",
+          "title": "链路是上报出来的",
+          "sub": "7 节点 6 边，由探针的 `parentSourceId` 逐条拼出 —— 这张图不是画的"
+        }
+      },
+      "source": { "in": 26.0, "out": 62.0 },
+      "overlays": [
+        {
+          "id": "stats-observe",
+          "kind": "stats",
+          "from": 4.0,
+          "to": 36.0,
+          "animSeconds": 0.9,
+          "params": {
+            "items": [
+              { "label": "节点", "value": "7", "tone": "accent" },
+              { "label": "边", "value": "6" },
+              { "label": "层次", "value": "HOST→AGENT" }
+            ]
+          }
+        },
+        {
+          "id": "cap-observe",
+          "kind": "caption",
+          "from": 0.0,
+          "to": 36.0,
+          "params": { "text": "先给健康基线：没有基线，后面的画面无法证明那是「故障」而不是「它一直这样」" }
+        }
+      ],
+      "title": "② 正常观测"
+    },
+    {
+      "id": "inject",
+      "card": {
+        "kind": "section",
+        "seconds": 2.6,
+        "params": {
+          "n": "3",
+          "num": "③ 故障注入",
+          "title": "注入 → 告警 → 诊断 全自动",
+          "sub": "`./deploy/inject_fault.sh container_oom`"
+        }
+      },
+      "source": { "in": 62.0, "out": 128.0 },
+      "overlays": [
+        {
+          "id": "flash-inject",
+          "kind": "flash",
+          "from": 16.0,
+          "to": 16.45,
+          "animSeconds": 0.45,
+          "params": {}
+        },
+        {
+          "id": "cap-inject",
+          "kind": "caption",
+          "from": 0.0,
+          "to": 18.0,
+          "params": { "text": "注入一次容器 OOM" }
+        },
+        {
+          "id": "cap-aggregate",
+          "kind": "caption",
+          "from": 20.0,
+          "to": 66.0,
+          "params": {
+            "key": true,
+            "text": "3 条告警 → **2 条**指向同一个 diagnosisId　<small>warning 那条按设计不自动诊断</small>"
+          }
+        }
+      ],
+      "title": "③ 故障注入"
+    },
+    {
+      "id": "real",
+      "card": {
+        "kind": "section",
+        "seconds": 2.6,
+        "params": {
+          "n": "3",
+          "num": "③b 真实证据",
+          "title": "这次是真的",
+          "sub": "同一个负载、同一个限额，但证据来自容器的**真实**运行时读数，不是构造的载荷"
+        }
+      },
+      "source": { "in": 128.0, "out": 168.0 },
+      "overlays": [
+        {
+          "id": "cap-real",
+          "kind": "caption",
+          "from": 0.0,
+          "to": 40.0,
+          "params": {
+            "text": "`docker inspect` → OOMKilled=true　ExitCode=137　RestartCount 递增　证据 `source=probe`"
+          }
+        }
+      ],
+      "title": "③b 真实证据（刻意不加动效）"
+    },
+    {
+      "id": "crosslayer",
+      "card": {
+        "kind": "section",
+        "seconds": 2.6,
+        "params": {
+          "n": "4",
+          "num": "④ 跨层关联",
+          "title": "单来源看不到另一半",
+          "sub": "探针看不到平台侧显存，GPU 渠道看不到 VM 内的进程 —— 只有叠在同一条链上才得出结论"
+        }
+      },
+      "source": { "in": 168.0, "out": 208.0 },
+      "overlays": [
+        {
+          "id": "cap-cross",
+          "kind": "caption",
+          "from": 0.0,
+          "to": 40.0,
+          "params": { "text": "`python -m app.demo demo --cross-layer`　平台层 + 探针症状 + GPU 根因，三份批次叠成一条链" }
+        }
+      ],
+      "title": "④ 跨层关联"
+    },
+    {
+      "id": "diagnosis",
+      "card": {
+        "kind": "section",
+        "seconds": 2.6,
+        "params": {
+          "n": "5",
+          "num": "⑤ 诊断输出",
+          "title": "根因 / 影响范围 / 建议",
+          "sub": "置信分由 `confidenceBreakdown` 逐项可复算；证据不足时返回 `UNKNOWN`，不猜"
+        }
+      },
+      "source": { "in": 208.0, "out": 250.0 },
+      "overlays": [
+        {
+          "id": "stats-diagnosis",
+          "kind": "stats",
+          "from": 4.0,
+          "to": 42.0,
+          "animSeconds": 0.9,
+          "params": {
+            "items": [
+              { "label": "根因", "value": "CONTAINER_MEMORY_LIMIT", "tone": "critical" },
+              { "label": "置信", "value": "0.90", "tone": "accent" },
+              { "label": "建议", "value": "INCREASE_CONTAINER_MEMORY" }
+            ]
+          }
+        },
+        {
+          "id": "cap-diagnosis",
+          "kind": "caption",
+          "from": 0.0,
+          "to": 42.0,
+          "params": { "text": "影响范围分三组互不重叠：affected / onChain / potentiallyAffected" }
+        }
+      ],
+      "title": "⑤ 诊断输出"
+    },
+    {
+      "id": "close",
+      "card": {
+        "kind": "outro",
+        "seconds": 3.0,
+        "params": {
+          "stack": [
+            "Python 3.12 + FastAPI + PostgreSQL",
+            "18 个端点 · 805 项测试通过",
+            "`docs/REQUIREMENTS_GAP.md`　交付要求 a–g 逐项覆盖",
+            "`docs/DEPENDENCIES.md`　第三方依赖清单"
+          ],
+          "meta1": "开源软件应用创新大赛 · 智算云赛道 · ZSvirt 命题　队伍：Crosslayer"
+        }
+      },
+      "title": "片尾"
+    }
+  ]
+}
