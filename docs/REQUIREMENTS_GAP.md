@@ -10,7 +10,7 @@
 > 3. 不允许把"本地能跑通"写成"在 ZSvirt 环境里验证过"。
 >
 > 相关文档：[`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) §6（外部阻塞登记）、
-> [`DEPLOYMENT.md`](DEPLOYMENT.md) §7（演示环境）、[`DEMO_SCRIPT.md`](DEMO_SCRIPT.md)（录制脚本）。
+> [`DEPLOYMENT.md`](DEPLOYMENT.md) §7（演示环境）。
 
 ---
 
@@ -24,7 +24,7 @@
 | d | 样例 AI 工作负载 | 🔶 **配置完成 + 已在开发机上真实跑通；未在 ZSvirt VM 内实跑** | `deploy/sample-workload/` |
 | e | 三类故障场景与证据 | 🔶 **三类全部实现；「容器/进程异常」已用真实容器跑通，另两类仍为模拟** | `backend/app/zsvirt/scenarios.py`、`deploy/sample-workload/collect_real_events.py` |
 | f | 可复现材料 | ✅ **完成** | 见 §4 |
-| g | 真实环境 3–5 分钟演示视频 | ⛔ **未产出** | 脚本就绪：`docs/DEMO_SCRIPT.md` |
+| g | 真实环境 3–5 分钟演示视频 | 🔶 **已产出**（自建环境，非命题方 ZSvirt 环境） | 演示视频与录制脚本**随交付物单独提供，不入库** |
 
 **一句话结论**：a / b / c / f 四项可交付且自洽；**d / e 完成到"配置 + 可复现证据"，
 差最后一步"在命题方环境里真实跑一遍"；g 依赖 d / e 与一名能录音的录制者。**
@@ -56,7 +56,7 @@
 | 告警 / 事件详情 | 告警列表 / 详情 / 证据展开 / 事件反向链路 | `GET /api/v1/alerts`、`/events` |
 | 根因关联展示 | 诊断详情（三集影响范围 + 可复算置信分） | `GET /api/v1/diagnosis/{id}` |
 
-一键启动：`./deploy/start.sh --demo`；录制路径见 [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md)。
+一键启动：`./deploy/start.sh --demo`。
 
 ## 4. c / f —— ✅ 完成
 
@@ -166,8 +166,7 @@
 
 | 项 | 状态 |
 |---|---|
-| 录制脚本 | ✅ [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md)（含旁白、时间轴、预期输出、常见提问） |
-| 录制操作手册 | ✅ `DEMO_SCRIPT.md` §0「录制操作手册」 |
+| 录制脚本与操作手册 | ✅ 已产出，**随交付物单独提供，不入库** |
 | 环境前提 | ⛔ 依赖 d / e（命题方 VM） |
 | 录制者 | ⛔ **需要人来录** —— 旁白必须是人的声音；且演示目标环境不在本机 |
 

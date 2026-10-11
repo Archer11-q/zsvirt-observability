@@ -219,7 +219,7 @@ POST /api/v1/diagnoses/{id}/ticket          处置工单（纯函数渲染，人
 
 ### 任务 7：演示与可复现材料 —— ✅ 已完成
 
-**交付物**：`deploy/start.sh`、`deploy/inject_fault.sh`、`docs/DEMO_SCRIPT.md`、
+**交付物**：`deploy/start.sh`、`deploy/inject_fault.sh`、
 `app/demo.py`、`app/zsvirt/scenarios.py`、`tests/test_demo.py`（39 项）、
 `tests/test_multi_scenario.py`（8 项）。
 

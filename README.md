@@ -28,7 +28,7 @@
 > **逐项的差距、原因与补齐条件见 [docs/REQUIREMENTS_GAP.md](docs/REQUIREMENTS_GAP.md)**；
 > 未关闭的外部阻塞见 [docs/DECISIONS.md](docs/DECISIONS.md) §8（X-ID 清单）。
 >
-> 录制演示：[docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)（含旁白、时间轴与操作手册）。
+> 演示录制脚本随交付物**单独提供，不入库** —— 仓库只保留源码与相关文档。
 
 ## 文档
 
@@ -48,7 +48,6 @@
 | [docs/EVENT_COVERAGE_MATRIX.md](docs/EVENT_COVERAGE_MATRIX.md) | **事件覆盖对账矩阵**（事件类型 → 告警规则 → 诊断规则，由代码生成） |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | **第三方依赖清单**（赛题交付要求 f） |
 | [docs/REQUIREMENTS_GAP.md](docs/REQUIREMENTS_GAP.md) | **交付要求 a–g 覆盖与缺口** —— 做到什么程度、缺的为什么缺、什么条件下能补 |
-| [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) | **演示与录制脚本** —— 时间轴、旁白、录制操作手册、常见提问 |
 | [docs/backend/BACKEND_DESIGN.md](docs/backend/BACKEND_DESIGN.md) | 后端模块设计 |
 | [docs/backend/DIAGNOSIS_DESIGN.md](docs/backend/DIAGNOSIS_DESIGN.md) | 诊断引擎与故障场景设计 |
 | [docs/ADR/](docs/ADR/) | 架构决策记录 |
@@ -149,7 +148,7 @@ export SIMULATED_DATA_ENABLED=true
 `--demo` 额外把 `ALERT_RECOVERY_AFTER_SEC` 设为 `0`（关闭按墙钟的告警自动恢复）。
 理由：演示数据的时间基准是**固定的过去时刻**（为了可复现），而恢复判据拿墙钟去比，
 不关掉的话服务起来一个调度周期内所有告警都会变 `resolved`、`?state=firing` 返回空。
-真实部署应设成 `600`。详见 `docs/DEMO_SCRIPT.md` 的「复现性声明」。
+真实部署应设成 `600`。
 
 启动后 `GET /api/health` 的 `gpuProvider` 显示当前数据渠道（`zsvirt-zwatch` / `guest-smi` /
 `simulated` / `auto`）、**真实探活结果** `available`、认证方式 `authStyle` 与凭据是否就绪

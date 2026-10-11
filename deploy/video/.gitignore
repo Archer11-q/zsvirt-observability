@@ -1,9 +1,0 @@
-# 中间产物与原始素材都不进仓库。
-# raw/ 里是原始录屏（可能上百 MB），build/ 是可重建的 PNG 序列，out/ 是成片。
-# 三者都能由 `npm run render && npm run compose` 重新生成，没必要占仓库体积。
-node_modules/
-raw/*
-!raw/.gitkeep
-build/
-out/
-timeline.json
