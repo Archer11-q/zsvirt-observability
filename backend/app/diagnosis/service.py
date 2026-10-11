@@ -26,7 +26,7 @@ from app.alerts.repository import query_alerts
 from app.diagnosis import Diagnosis, DiagnosisContext, RuleSet, TimeWindow, diagnose
 from app.diagnosis.rules import build_default_rule_set
 from app.diagnosis.types import Edge as DiagnosisEdge
-from app.diagnosis.types import Evidence, EvidenceKind, Resource
+from app.diagnosis.types import Evidence, EvidenceKind, EvidenceSource, Resource
 from app.events.repository import query_events
 from app.graph.repository import load_graph
 from app.models import Alert
@@ -146,6 +146,39 @@ def build_context(
     )
 
 
+def _evidence_source(event: Any) -> EvidenceSource:
+    """一条事件所产生证据的**来源渠道**。
+
+    取自事件的 `raw.origin`：`EventSource` 只有 `zsvirt` / `probe` / `derived`
+    三种（契约冻结），装不下"渠道"这一维，所以渠道走 `raw`。
+
+    **为什么必须有这个函数**：`Evidence.source` 与 `EvidenceSource.SIMULATED`
+    一直存在，但构造证据时从不传 `source`，于是全部落到默认值 `PROBE` ——
+    模拟 GPU 渠道的读数在证据链上与探针真实采集**完全无法区分**，
+    引擎里那句"本次诊断包含模拟数据来源的证据"因此永不触发，
+    只在单测手搓 `Evidence` 时可见。一个**只在测试里成立**的诚实性机制，
+    比没有这个机制更危险：它让人以为已经做过了。
+
+    缺省回退 `PROBE` 的理由：走到这里的绝大多数事件确实是探针推上来的
+    （`ingest` 是探针上报通道）。未知取值不猜、也不吞掉 —— 回退到传输层事实。
+    """
+    raw = getattr(event, "raw", None)
+    if not isinstance(raw, dict):
+        # `raw` 是 JSON 列：历史数据、手工导入、以及脱敏管道都可能让它不是对象。
+        # 这里**只做类型守卫，不做修复** —— 猜一个来源比承认不知道更糟，
+        # 而 `PROBE` 是唯一不需要猜的答案（传输层事实）。
+        return EvidenceSource.PROBE
+    value = raw.get("origin")
+    if isinstance(value, str):
+        try:
+            return EvidenceSource(value)
+        except ValueError:
+            # 认不出的取值**不猜**：回退到传输层事实。刻意不抛异常 ——
+            # 一条来源字段写坏的旧事件不该让整次诊断失败。
+            return EvidenceSource.PROBE
+    return EvidenceSource.PROBE
+
+
 def _event_evidence(event: Any) -> list[Evidence]:
     """把一个事件展开成若干条证据。
 
@@ -163,12 +196,20 @@ def _event_evidence(event: Any) -> list[Evidence]:
 
     两者共用同一组 `eventIds`，所以任一条都能追回原始事件。
     """
+    # 只解析一次：同一个事件展开出的**每一条**证据都同源。
+    #
+    # 早先只在"事件"那一条上标了 `source`，指标那几条漏了 —— 实测表现是同一次
+    # 诊断里 `container.oom_killed` 标着 `simulated`，而由它派生的 `exitCode`
+    # / `oomKilledCount` 标着 `probe`。**同一条证据链自相矛盾，比完全不标更糟**：
+    # 看的人会以为其中一条是真的、另一条是模拟的。
+    source = _evidence_source(event)
     items: list[Evidence] = [
         Evidence(
             kind=EvidenceKind.EVENT,
             name=event.type,
             at=event.occurred_at,
             resource_id=event.resource_id,
+            source=source,
             value=_evidence_value(event),
             count=_evidence_count(event),
             event_ids=(event.id,),
@@ -187,6 +228,7 @@ def _event_evidence(event: Any) -> list[Evidence]:
                 name=str(key),
                 at=event.occurred_at,
                 resource_id=event.resource_id,
+                source=source,
                 value=str(number),
                 event_ids=(event.id,),
             )

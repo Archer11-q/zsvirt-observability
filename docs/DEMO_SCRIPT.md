@@ -4,15 +4,135 @@
 > 而不是听一段功能清单。
 >
 > **诚实前提**：演示机没有 GPU，因此 GPU 数据来自**模拟渠道**
-> （`SimulatedProvider`）。这一点会在报告、`GET /api/health` 与每条证据的
-> `origin` 字段里**明确标注**，不会伪装成真实采集。真实部署下该字段是
-> `zsvirt-zwatch` 或 `probe`。
+> （`SimulatedProvider`）。标注落在三个**可查证**的地方，不是一句口头声明：
+>
+> | # | 位置 | 演示环境的值 | 真实部署的值 |
+> |---|---|---|---|
+> | 1 | `GET /api/health` → `components.gpuProvider.mode` | `simulated` | `zsvirt-zwatch` / `guest-smi` |
+> | 2 | 每条诊断证据的 `source`（`DiagnosisEvidence.source`） | `simulated` | `zwatch` / `probe` |
+> | 3 | 资源属性 `attributes.origin`（拓扑里点开 GPU / vGPU） | `simulated` | `zwatch` |
+>
+> 第 2 条的链路是：演示载荷在事件的 `raw.origin` 里带 `simulated` →
+> `app/diagnosis/service.py::_evidence_source` 映射成证据 `source`。
+> `EventSource` 只有 `zsvirt` / `probe` / `derived` 三种（契约冻结），
+> 装不下"渠道"，所以走 `raw` —— 这与"不改冻结契约"并不冲突。
+>
+> **把模拟数据说成真实采集是这个项目最严重的信任事故。** 录制前请按下面
+> 「录制操作手册」的三条自检，亲眼确认这三处真的显示 `simulated`。
 
 | 字段 | 值 |
 |---|---|
 | 时长 | 5 分钟（其中讲解 3.5 分钟，留 1.5 分钟提问） |
 | 前置 | 已完成 `docs/DEPLOYMENT.md` §3 的环境搭建 |
-| 一次性准备 | `./deploy/start.sh --with-demo`（迁移 + 灌数据 + 启动） |
+| 一次性准备 | `./deploy/start.sh --demo`（**只迁移 + 启动，不灌数据**，见下节） |
+| 演示端口 | `8080` —— `deploy/start.sh` 与 `deploy/inject_fault.sh` 的默认值 |
+
+---
+
+## 录制操作手册（录制者先看这一节）
+
+### 为什么要人工录
+
+赛题要的是「**真实环境** 3–5 分钟录屏」，旁白必须是真人的声音。工具链没有
+语音旁白能力，也不该由工具去扮演讲解者。所以录制这件事需要一个人坐在机器前，
+按下面的时间轴操作，同时口播对应小节的旁白。
+
+### 一次性准备（两个终端）
+
+**终端 A —— 服务（跑起来就不要再动它）**
+
+```bash
+cd ~/archer/workspace/zsvirt-observability
+
+pg_isready -h 127.0.0.1 -p 5432          # 必须 accepting connections
+cd backend && ./.venv/bin/python -m app.demo reset && cd ..
+#   ↑ 清空上一次留下的数据。**不清空的话注入会变成幂等回放**，
+#     屏幕上看不到任何变化（batchId 按场景名固定，这是 A 的 Q2 幂等语义）
+
+./deploy/start.sh --demo
+#   预期第一屏就打印：
+#     演示基线：SIMULATED_DATA_ENABLED=true  GPU_PROVIDER=simulated  ALERT_RECOVERY_AFTER_SEC=0
+#   ↑ 这一行必须出现。没有它说明你用的是旧的启动方式，
+#     那么 §1 要讲的 simulated 会变成 auto，§4 的 firing 列表会是空的
+```
+
+**终端 B —— 操作（§1 之后的命令都在这里敲）**
+
+```bash
+cd ~/archer/workspace/zsvirt-observability
+```
+
+浏览器另开一个窗口放前端（`http://localhost:5173`，启动方式见 `DEPLOYMENT.md`）。
+
+### 录制前三条自检（**不要跳过**）
+
+```bash
+# ① 渠道必须是 simulated，不能是 auto
+curl -s localhost:8080/api/health | python3 -m json.tool | grep -A4 gpuProvider
+
+# ② 必须没有任何告警（干净基线 —— 这是 §6 负向基线的前提）
+curl -s 'localhost:8080/api/v1/alerts?state=firing' | python3 -m json.tool | head -5
+
+# ③ 拓扑必须是「7 节点 6 边」那条完整链
+curl -s 'localhost:8080/api/v1/topology?depth=8' \
+  | python3 -c "import json,sys; d=json.load(sys.stdin)['data']; print(len(d['nodes']), '节点', len(d['edges']), '边')"
+```
+
+三条都对了再按录制键。任何一条不对，先修好再录 —— 现场改代码的镜头比不录更糟。
+
+### 屏幕布局建议
+
+| 区域 | 内容 | 理由 |
+|---|---|---|
+| 主区 | 浏览器：拓扑页 | 评委的眼睛应该始终有画面可看 |
+| 左下 | 终端 B（命令 + JSON 输出） | 证伪成本最低的证据展示 |
+| 右下 | `curl …/api/health` 的输出，**保持常驻** | §1 要指着它说话，来回切窗口会显得心虚 |
+
+字号调大：JSON 输出在 1080p 录像里 12px 是不可读的。
+
+### 时间轴（按这个顺序，旁白对着左侧小节念）
+
+| 时间 | 操作（终端 B） | 屏幕上应看到 | 旁白 |
+|---|---|---|---|
+| 0:00–0:15 | 无 | 拓扑页 | §0 一句话开场 |
+| 0:15–0:45 | `curl -s localhost:8080/api/health \| python3 -m json.tool` | `gpuProvider.mode = simulated`、`scheduler` 组件 | §1 |
+| 0:45–1:30 | `curl -s 'localhost:8080/api/v1/topology?depth=8' \| python3 -m json.tool \| head -40` | 7 节点 / 6 边，`isStale=false` | §2 |
+| 1:30–3:00 | `./deploy/inject_fault.sh gpu_self_exhausted` 然后 `gpu_neighbor_contention` | 两条告警**规则相同、诊断不同** | §3 |
+| 3:00–4:00 | `cd backend && ./.venv/bin/python -m app.demo demo --cross-layer` | 一条跨层结论 | §3.5 |
+| 4:00–5:00 | `./deploy/inject_fault.sh container_oom` / `network_failure` | 三条告警；其中**两条**指向同一个 `diagnosisId`，`warning` 那条按设计不自动诊断 | §4 |
+| 5:00–5:45 | `curl -s localhost:8080/api/v1/diagnoses/<id> \| python3 -m json.tool` | 三集影响范围互不重叠 | §5 |
+| 5:45–6:15 | 静默 + `./deploy/inject_fault.sh healthy` | 静默期内不新建告警；正常负载零告警 | §6 |
+| 6:15–6:30 | 无 | 无 | §7 收尾 |
+
+> 表里的总时长写到了 6:30，是为了留出**口令卡顿与命令回显**的余量。
+> 成片要求 3–5 分钟，所以实际录制时 §2 / §3.5 可以压掉一半旁白；
+> **不要压缩的是 §3（归因区分）与 §6（负向基线）** —— 这两段是评委真正想看的。
+
+### 录制后校验
+
+| 检查 | 方法 |
+|---|---|
+| 片长 3–5 分钟 | 播放器看时长 |
+| 旁白与画面一致 | 抽 §3 那一段对一遍：屏幕上两个根因确实不同 |
+| 没有露出敏感信息 | 确认画面里没有数据库口令、内网 IP、`backend/.env` 内容 |
+| 出处可查 | 确认讲过的话都能在 `docs/` 里找到对应文档 |
+
+### 常见故障与对策
+
+| 现象 | 原因 | 对策 |
+|---|---|---|
+| `?state=firing` 返回空 | 告警被自动恢复关掉了 | 确认启动时打印了 `ALERT_RECOVERY_AFTER_SEC=0`；用 `--demo` 重启 |
+| 注入后屏幕没变化 | 库里已有同一场景的批次（幂等回放） | `python -m app.demo reset` 后重录 |
+| 拓扑里全是离线符号 | 打开了 `RESOURCE_STALE_AFTER_SEC` | 演示模式必须为 `0` |
+| `health` 报 `mode=auto` | 没走 `--demo` 基线 | 用 `./deploy/start.sh --demo` 重启 |
+| `inject_fault.sh` 说服务不可达 | 服务没起来或不在 8080 | 先 `curl localhost:8080/api/health` |
+
+### 明确不要做的事
+
+- **不要说"这是真实 GPU 数据"**。想讲的是关联与推理能力，不是硬件。
+- **不要隐藏模拟来源**。X-07 的答复明确要求区分真实采集 / 真实回放 / 人工模拟；
+  声明过再演示是合规的，不声明才是问题。
+- **不要念稿式地逐条读 JSON**。指着字段说结论，让画面自己作证。
 
 ---
 
@@ -34,8 +154,23 @@ curl -s localhost:8080/api/health | python3 -m json.tool | head -30
 
 > "这里显示 `simulated`，因为演示机没有 GPU。赛题要求支持降级/模拟模式，
 > 我们的做法是**把'这些数字是模拟的'做成结构上无法混淆的事实** ——
-> 渠道名称会一路出现在健康检查、每条证据的来源字段和演示报告的开头。
+> 渠道名称会一路出现在健康检查、每条诊断证据的 `source` 字段、以及拓扑里
+> 资源的 `origin` 属性上，不只是报告里的一句提示。
 > 一个模拟读数被当成真实 GPU 数据来讲解，是这个项目最严重的信任事故。"
+
+**接着指证据的来源字段**（这样"三处都标了"就不是空话）：
+
+```bash
+curl -s localhost:8080/api/v1/diagnoses | python3 -c "
+import json,sys
+for d in json.load(sys.stdin)['data']['items'][:1]:
+    for e in d['evidence'][:3]:
+        print(e['name'], '←', e.get('source'))"
+```
+
+> "注意每一条证据都有自己的 `source`。演示环境是 `simulated`，
+> 真实部署下这里会变成 `zwatch` 或 `probe` —— 因为**证据链**才是结论的出处，
+> 只在仪表盘上标一句'数据为模拟'是不够的。"
 
 **同时指出** `components.database.status` 与 `ingest.unresolvedEvents`：
 
@@ -115,9 +250,14 @@ cd backend
 我们用一组对照测试把这一点固定下来（`test_cross_layer.py`），
 证明结论来自关联而不是"看到 I/O 等待就报显存耗尽"。
 
-> ⚠️ **如实说明**：平台层与探针层之间的 ID 映射（ZSvirt 命名空间 ↔ 探针命名空间）
-> **尚未实现**，因此这个演示里平台层资源是代为上报的。真实部署需要 ZSvirt 适配层，
-> 它阻塞于命题方（接口与权限待确认）。
+> ⚠️ **如实说明（这一段建议主动讲，不要等被问）**：平台层与探针层之间的 ID 映射，
+> **宿主 / GPU 段已经打通**了 —— `app/zsvirt/harvest.py` 把 ZWatch 读数映射成
+> `host:zsvirt:{uuid}` / `gpu:zsvirt:{serial}` 并落图（D-101）。
+> **VM 段还没有**：它需要 ZSvirt 的 VM UUID，而探针 `vmId` 的注入方式一直没拿到
+> 答复（外部阻塞 X-09）。所以这个演示里 `vGPU → VM → 容器` 这一段仍是**代为上报**。
+>
+> "我们没有把这一段藏起来：`docs/REQUIREMENTS_GAP.md` 里逐条写着哪些是真桥接、
+> 哪些是代为上报，以及缺哪一份材料才能补上。"
 
 ---
 
@@ -135,18 +275,40 @@ cd backend
 
 **这里要主动讲一个我们改过的设计**：
 
-> "一次容器 OOM 会产生三条告警：OOM、重启、推理错误。我们最初的实现是
+> "一次容器 OOM 会产生**三条**告警：`R-CTR-OOM-010`（critical）、
+> `R-CTR-RESTART-011`（warning）、`R-AIS-ERROR-021`（error）。我们最初的实现是
 > **每条告警诊断一次**，结果写出三条内容几乎相同的结论 —— 诊断列表变成噪声。
 >
-> 现在按'资源可达闭包相交'把告警聚成**事故**，一次事故一条结论，
-> 事故内所有告警都关联到它。这是运维真正的工作单位。"
+> 现在按'资源可达闭包相交'把告警聚成**事故**，一次事故一条结论。
+>
+> 注意这里只有**两条**指向同一个 `diagnosisId`：warning 那条我们**故意没有**
+> 自动诊断 —— 低级告警数量多，自动跑会灌出一堆 `UNKNOWN` 把诊断列表冲淡。
+> 它是可点的，用户想要结论可以一键触发。**该跳过的跳过，并说明跳过原因**，
+> 比'全都诊断一遍显得很勤奋'更有用。"
 
 ```bash
 curl -s 'localhost:8080/api/v1/alerts?state=firing' \
   | python3 -c "import json,sys; [print(a['ruleId'], a['severity'], '→', a['diagnosisId']) for a in json.load(sys.stdin)['data']['items']]"
 ```
 
-**指出三条告警指向同一个 `diagnosisId`。**
+**指出其中两条指向同一个 `diagnosisId`，并主动解释第三条为什么没有。**
+
+实测输出形如（`diagnosisId` 只有两条非空）：
+
+```text
+  R-AIS-ERROR-021   error    → diag_01M4MM...
+  R-CTR-RESTART-011 warning  → None          ← 低级告警，按设计不自动诊断
+  R-CTR-OOM-010     critical → diag_01M4MM...
+```
+
+> "`warning` 那条是 `None`，不是漏了 —— 这是有意的（上面刚讲过）。
+> 顺手提一句：接口会把跳过原因和数量**如实报出来**，
+> 上报响应里的 `skippedBelowSeverity` 就是它。"
+
+> ⚠️ 如果这条命令**返回空**：说明告警被自动恢复关掉了。演示模式
+> （`./deploy/start.sh --demo`）把 `ALERT_RECOVERY_AFTER_SEC` 设为 `0`（关闭恢复）
+> 正是为了避免这一幕 —— 演示数据的时间基准是固定的过去时刻（为了可复现），
+> 恢复判据拿墙钟一比就全部"过期"，服务起来一个调度周期内 `firing` 会变空。
 
 ---
 
@@ -179,8 +341,13 @@ curl -s localhost:8080/api/v1/diagnoses/<id> | python3 -m json.tool
 ## 6. 处置闭环与负向基线（30 秒）
 
 ```bash
-# 静默一条告警，再注入一次，验证静默期内不再打扰
-curl -s -X POST localhost:8080/api/v1/alerts/<id>/actions \
+# 先取一条生效中告警的 id（不要手抄，现场抄错会很尴尬）
+ALERT=$(curl -s 'localhost:8080/api/v1/alerts?state=firing' \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['items'][0]['id'])")
+echo "$ALERT"
+
+# 静默它，再注入一次，验证静默期内不再打扰
+curl -s -X POST "localhost:8080/api/v1/alerts/$ALERT/actions" \
      -H 'content-type: application/json' -d '{"action":"silence","silenceSeconds":600}'
 ./deploy/inject_fault.sh container_oom
 ```
@@ -213,12 +380,15 @@ curl -s localhost:8080/api/v1/alerts
 | 提问 | 回答要点 |
 |---|---|
 | GPU 数据是真实采集的吗？ | 演示机没有 GPU，走 `SimulatedProvider`，`origin=simulated` 全程可见；真实部署用 ZWatch 或 VM 内探针（`DATA_MODEL.md` §4.2.1） |
-| ZWatch 接了吗？ | 未接，ZSvirt premium 模块是否在测试环境启用待命题方确认（外部阻塞 X-07）。**不按未确认的接口写适配器** —— 那只能靠猜 |
+| ZWatch 接了吗？ | **接了**（`app/zsvirt/watch.py`）：认证会话 + 提前续期 + 元数据缓存 + 5 个 GPU 指标。X-05 / X-07 已关闭（命题方确认 ZWatch 已启用在用、模拟数据标注合规）。**响应形状是单一假设**：字段不符即抛 `ZWatchSchemaError`，不静默返回空 —— 字段样例仍在索要（X-12） |
 | 置信分怎么来的？ | 规则加权评分，非统计学概率；`confidenceBreakdown` 逐项可复算；最高分 < 0.30 强制返回 UNKNOWN |
 | 为什么不每条告警都诊断？ | 一次事故会产生多条告警，逐条诊断会刷出重复结论。按"资源可达闭包相交"聚成事故后诊断一次 |
 | 为什么有告警没有诊断？ | `warning` 级告警不自动诊断（避免灌一堆 UNKNOWN），用户可按需一键诊断。响应里会如实报告跳过原因与数量 |
 | 数据是模拟的，结论还有意义吗？ | 有意义的是**关联与推理过程**：同一套规则在真实数据上给出同样的结论形态。模拟只替换了输入来源，`origin` 字段把它标注清楚 |
 | 用了哪些中间件？ | 只有 Python + FastAPI + PostgreSQL。刻意不引入 Kafka / Redis / Prometheus 等（`ADR-0003`），全部运行依赖 13 个 |
+| 你怎么证明"模拟数据可识别"不是口号？ | 三处可查证：`health` 的 `gpuProvider.mode`、每条证据的 `source`、资源属性的 `origin`；回归测试在 `tests/test_provenance.py` |
+| 为什么告警不会自动恢复？ | 演示模式把 `ALERT_RECOVERY_AFTER_SEC` 设为 `0`（关闭）。演示数据时间基准固定在过去，恢复判据拿墙钟一比就全部过期 —— 真实部署应设为 600 秒 |
+| 平台层资源是真桥接还是代为上报？ | `宿主 → GPU → vGPU` 是真桥接（`zsvirt/harvest.py`，D-101）；`vGPU → VM → 容器` 是**代为上报**，缺探针 `vmId` 的注入方式（X-09）。见 `REQUIREMENTS_GAP.md` |
 
 ---
 
@@ -227,6 +397,22 @@ curl -s localhost:8080/api/v1/alerts
 演示数据可复现：`SimulatedProvider` 用**显式种子**的独立随机源，场景参数固定，
 时间基准固定为 `2026-09-17T12:00:00Z`。因此同一台机器上重复运行得到同样的数字，
 讲解词不会与界面对不上。
+
+**这个"固定在过去"的时间基准有一个必须知道的副作用**：告警自动恢复、资源
+`stale` / `gone` 都是拿**墙钟**去比数据时间，于是演示数据一进库就已经"过期"。
+所以演示模式（`./deploy/start.sh --demo`）显式关掉这两类判定：
+
+| 配置 | 演示值 | 不关掉的后果（实测） |
+|---|---|---|
+| `ALERT_RECOVERY_AFTER_SEC` | `0`（关闭） | 服务起来一个调度周期内全部告警变 `resolved`，`?state=firing` 返回空 |
+| `RESOURCE_STALE_AFTER_SEC` / `RESOURCE_GONE_AFTER_SEC` | `0`（关闭） | 拓扑上全部资源立刻变 `stale`，画面到处是离线符号 |
+
+这三项的**真实部署值**见 `backend/.env.example`。
+
+> ⚠️ `inject_fault.sh` 的 `batchId` 按场景名固定，**重复注入同一个场景是幂等回放**
+> （不重复写事件 —— 这本身就是对成员 A 的 Q2 幂等语义的演示）。
+> 想看到"重新注入产生新证据"，先 `cd backend && ./.venv/bin/python -m app.demo reset`，
+> 或者换一个场景注入。
 
 ```bash
 cd backend

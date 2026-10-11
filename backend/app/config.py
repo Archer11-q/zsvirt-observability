@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     # --- 诊断 ---
     diag_window_tolerance_sec: int = Field(default=30, alias="DIAG_WINDOW_TOLERANCE_SEC")
     #: 告警自动恢复窗口（D-084）。超过它没有新证据的告警转 `resolved`。
+    #:
+    #: **0 表示关闭自动恢复** —— 不是"立刻全部恢复"。差别见
+    #: `alerts/engine.py::reconcile`（那里有一个反直觉的坑）。
+    #:
+    #: 演示环境**必须**关掉：`app.demo` 的数据时间基准是固定的过去时刻
+    #: （为了可复现），而恢复判据拿墙钟比证据时间，于是数据一进库就算过期，
+    #: 服务起来一个周期内告警全变 `resolved`。理由与下面的
+    #: `resource_stale_after_sec` 完全相同。真实部署应设有意义的值（600 = 10 分钟）。
     alert_recovery_after_sec: int = Field(default=600, alias="ALERT_RECOVERY_AFTER_SEC")
 
     # --- 后台周期任务（见 app/scheduler.py）---
@@ -90,7 +98,16 @@ class Settings(BaseSettings):
 
     @property
     def alert_recovery_after(self) -> timedelta:
-        """告警自动恢复窗口（`timedelta` 形式，供 `reconcile_all` 使用）。"""
+        """告警自动恢复窗口（`timedelta` 形式，供 `reconcile_all` 使用）。
+
+        配置 <= 0 时返回 `timedelta(0)`，`reconcile` 把它解释为**关闭该步**。
+
+        返回 `timedelta(0)` 而不是 `None` 是有意的：在 `reconcile` 里
+        `None` 表示"用规则集自带的默认值"，"关闭"与"没配置"是两种语义，
+        不能共用同一个哨兵值。
+        """
+        if self.alert_recovery_after_sec <= 0:
+            return timedelta(0)
         return timedelta(seconds=self.alert_recovery_after_sec)
 
     @property

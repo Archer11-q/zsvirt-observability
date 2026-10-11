@@ -1,0 +1,109 @@
+# 样例容器化 AI 工作负载 —— 部署与故障注入（赛题交付要求 d / e）
+#
+# 赛题依据：
+#   d. 在虚拟机中运行至少一种容器化 AI 工作负载，提供**完整配置**
+#   e. 至少覆盖三类典型场景：容器/进程异常、GPU 或资源瓶颈、应用/Agent 任务异常
+#      每类需给出**告警、关联证据、影响范围和处置建议**
+#
+# ## 设计意图：这台机器上的资源限额就是故障注入旋钮
+#
+# 三类场景里的两类（容器异常、资源瓶颈）**不需要特殊工具**，只需要把限额压到
+# 负载真实需求之下：
+#
+#   | 场景 | 注入方式 | 观测到的信号 |
+#   |---|---|---|
+#   | 容器/进程异常 | `--memory` 压到 512m | `container.oom_killed` / `container.restart` |
+#   | GPU 或资源瓶颈 | 无 GPU 时用 CPU 限额 + 高并发 | `gpu.utilization.high` / 进程 I/O 等待 |
+#   | 应用/Agent 异常 | 停掉依赖服务 | `inference.timeout` / `container.network.unreachable` |
+#
+# 因此 `compose.yaml` 提供了**两个 profile**：`normal`（健康）与 `starved`（受限），
+# 后者就是把限额压小。切换 profile 即切换故障场景，不依赖任何外部注入工具。
+#
+# ## 演示机没有 GPU 时
+#
+# 默认走 CPU 极小模型（见 `Dockerfile.inference` 的说明）。GPU 是可选叠加，
+# 加 `--gpus all` 并把 `MODEL_NAME` 换大即可。**不伪装**：本平台在
+# `GET /api/health` 的 `gpuProvider.mode` 与每条证据的 `origin` 字段里如实标注来源。
+
+services:
+  # ---------------------------------------------------------------- 健康基线
+  #
+  # 先跑这个，让评委看到"正常状态长什么样"。没有健康基线，
+  # 后面的故障画面无法证明是"故障"而不是"它一直这样"。
+  inference:
+    build:
+      context: .
+      dockerfile: Dockerfile.inference
+    image: crosslayer/demo-inference:1.0
+    container_name: demo-inference
+    profiles: ["normal"]
+    ports:
+      - "8000:8000"
+    environment:
+      MODEL_NAME: "Qwen/Qwen2.5-0.5B-Instruct"
+      INFERENCE_LOG_DIR: "/var/log/inference"
+    volumes:
+      # 日志挂出来：探针按路径采集 `inference.*`，同时便于评委核对原始日志
+      - ./logs:/var/log/inference
+    # 健康基线的限额是**充裕**的（2g / 2 CPU）。这个数字不是随手写的：
+    # 受限 profile 用 512m，两者相差 4 倍，故障信号才明确可辨。
+    mem_limit: 2g
+    cpus: 2.0
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- 故障注入用
+  #
+  # 与上面是**同一个负载**，只把限额压到不够用。切换方式：
+  #   docker compose --profile starved up -d
+  # 预期：容器被 OOM Killer 终止（`container.oom_killed`，exitCode 137），
+  #       反复重启（`container.restart`）→ 平台上出现告警与根因
+  #       `CONTAINER_MEMORY_LIMIT`（置信度可由报告逐项复算）。
+  inference-starved:
+    build:
+      context: .
+      dockerfile: Dockerfile.inference
+    image: crosslayer/demo-inference:1.0
+    container_name: demo-inference-starved
+    profiles: ["starved"]
+    ports:
+      - "8001:8000"
+    environment:
+      MODEL_NAME: "Qwen/Qwen2.5-0.5B-Instruct"
+      INFERENCE_LOG_DIR: "/var/log/inference"
+    volumes:
+      - ./logs:/var/log/inference
+    # ↓ 注入旋钮：这个限额**故意**低于模型加载所需，从而必然 OOM。
+    #   512m 是实测能触发 OOMKilled 的上限（模型 0.5B 的 CPU 推理约需 ~1.2g）。
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 0.5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- 平台侧（可选）
+  #
+  # 若希望"被观测对象"与"观测平台"在同一台机器上演示，取消下面注释。
+  # 但**推荐分开**：后端跑在开发机（WSL），被观测负载跑在 ZSvirt 虚拟机里 ——
+  # 那才是赛题的真实拓扑（平台在 VM 外、负载在 VM 内）。
+  #
+  # crosslayer-backend:
+  #   image: crosslayer/backend:0.1.0
+  #   ports: ["8080:8080"]
+  #   environment:
+  #     DATABASE_URL: "postgresql+psycopg://crosslayer:***@db:5432/crosslayer"
+  #   depends_on: [db]
+
+# 备选：直接用官方 vLLM 镜像（省去自建，但体积大、且无法固定版本）：
+#
+#   inference-official:
+#     image: vllm/vllm-openai:latest
+#     command: ["--model", "Qwen/Qwen2.5-0.5B-Instruct", "--max-model-len", "2048"]
+#     ports: ["8000:8000"]
+#
+# **不推荐用于正式演示**：`latest` 不固定版本，重跑可能行为不同 ——
+# 而赛题「稳定性与可复现性 15%」要求同一场景结果稳定（`ADR-0003`）。

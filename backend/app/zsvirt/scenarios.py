@@ -42,6 +42,32 @@ from app.zsvirt import FaultProfile, SimulatedProvider
 #: 演示用的固定时间基准（与 `app.demo.DEMO_NOW` 一致）。
 _SCENARIO_NOW = datetime(2026, 9, 17, 12, 0, 0, tzinfo=UTC)
 
+#: 本模块构造的载荷都是**人工模拟**，不是真实采集。
+#:
+#: 赛题 X-07 的答复要求「一致标明来源，并区分**真实采集 / 真实回放 / 人工模拟**」。
+#: `EventSource` 只有 `zsvirt` / `probe` / `derived` 三种（契约已冻结），装不下
+#: "渠道"这一维，因此渠道写进事件的 `raw.origin`，再由
+#: `app/diagnosis/service.py::_evidence_source` 映射成诊断证据的 `source`。
+#:
+#: 为什么非要这么绕：`Evidence.source` 字段与 `EvidenceSource.SIMULATED` 枚举
+#: 一直存在，但**从来没有任何真实数据填过它**（构造证据时不传 `source`，
+#: 全部落到默认值 `PROBE`）。结果是模拟渠道产出的读数在证据链上与探针真实采集
+#: **完全无法区分** —— 而"模拟数据必须可识别"是赛题的明文要求。
+SIMULATED_ORIGIN = "simulated"
+
+
+def _stamp_origin(payload: dict[str, Any], origin: str) -> dict[str, Any]:
+    """给载荷打上渠道标注（**已有标注不覆盖**）。
+
+    不覆盖是关键：A 的真实样例回放自带来源语义，不能被演示载荷改写成
+    `simulated` —— 那会把"真实回放"降级成"人工模拟"，反向破坏诚实性。
+    """
+    raw = dict(payload.get("raw") or {})
+    raw.setdefault("origin", origin)
+    payload["raw"] = raw
+    return payload
+
+
 #: 探针标识与 VM。**必须是 B 能识别的全局 ID 形态**（`vm:zsvirt:<uuid>`），
 #: 否则会退化成占位节点，症状是"所有资源都挂在 unresolved 下"。
 DEMO_AGENT_ID = "demo-agent"
@@ -126,6 +152,7 @@ def _chain_resources(
             "sourceId": "demo-host",
             "name": "demo-node-01",
             "status": "running",
+            "attributes": {"origin": SIMULATED_ORIGIN},
         },
         {
             "kind": ResourceKind.GPU.value,
@@ -133,7 +160,11 @@ def _chain_resources(
             "name": "A10-0",
             "parentSourceId": "demo-host",
             "status": "running",
-            "attributes": gpu_attributes or {},
+            # 即使是非 GPU 场景（容器 OOM / 网络故障），这块 GPU 也是 B 构造出来的
+            # 链条脚手架，一律标 `simulated`。理由是**一致性本身就是诚实性的一部分**：
+            # 同一条链上"有的资源标了渠道、有的没标"，看起来像漏标，
+            # 而看的人无从判断漏标的那块到底是谁给的。
+            "attributes": {"origin": SIMULATED_ORIGIN, **(gpu_attributes or {})},
         },
         {
             "kind": ResourceKind.VGPU.value,
@@ -141,6 +172,7 @@ def _chain_resources(
             "name": "A10-0-1g",
             "parentSourceId": "demo-gpu0",
             "status": "running",
+            "attributes": {"origin": SIMULATED_ORIGIN},
         },
         {
             "kind": ResourceKind.VM.value,
@@ -215,6 +247,9 @@ def _gpu_attributes(profile: FaultProfile) -> dict[str, Any]:
         "power": asset.power_watts,
         "isDriverLoaded": asset.is_driver_loaded,
         "model": asset.model,
+        # 渠道标注也放在**资源**上：拓扑里点开 GPU 就能看到这些数字是谁给的，
+        # 不必先去翻事件的 `raw`。
+        "origin": SIMULATED_ORIGIN,
         # 性能字段来自指标渠道（origin 标注在事件上）
         # `memUsedBytes` / `temperatureC` 现在可为 None（ZWatch 渠道拿不到
         # 精确字节数与温度时就是 None）。这里用 `or 0`：模拟渠道必有值，
@@ -251,9 +286,11 @@ def build_cross_layer_batches() -> list[dict[str, Any]]:
     也是单来源采集做不到的地方（`DIAGNOSIS_DESIGN.md` §5 场景一）。
 
     ⚠️ **平台层刻意放在探针命名空间里**（`agentId` 与样例相同）：这样 `sourceId`
-    能互相解析、图是连通的。真实部署里平台层来自 ZSvirt 资产 API，而两个命名空间
-    之间的 ID 桥接**尚未实现**（`zsvirt_resource_id` 目前无任何调用方，见
-    `docs/DEVELOPMENT_PLAN.md` 的外部阻塞）。这里如实标注，而不假装它已经通了。
+    能互相解析、图是连通的。真实部署里平台层来自 ZSvirt 资产 API ——
+    `app/zsvirt/harvest.py` 已落地**宿主 / GPU** 的命名空间桥接（D-101），
+    但 **VM 层还没有**：它需要 ZSvirt 的 VM UUID，而探针 `vmId` 的注入方式
+    始终未获答复（外部阻塞 X-09，见 `docs/REQUIREMENTS_GAP.md`）。
+    所以演示里这一段仍是**代为上报**，这里如实标注，而不假装它已经通了。
     """
     fixture = AGENT_FIXTURES / "gpu_memory_exhausted.json"
     if not fixture.exists():
@@ -277,6 +314,7 @@ def build_cross_layer_batches() -> list[dict[str, Any]]:
                 "sourceId": "h0",
                 "name": "demo-node-01",
                 "status": "running",
+                "attributes": {"origin": SIMULATED_ORIGIN},
             },
             {
                 "kind": ResourceKind.GPU.value,
@@ -284,7 +322,11 @@ def build_cross_layer_batches() -> list[dict[str, Any]]:
                 "name": "A10-0",
                 "parentSourceId": "h0",
                 "status": "running",
-                "attributes": {"memTotalBytes": 24 * 1024**3, "serialNumber": "SIM-A10-0001"},
+                "attributes": {
+                    "memTotalBytes": 24 * 1024**3,
+                    "serialNumber": "SIM-A10-0001",
+                    "origin": SIMULATED_ORIGIN,
+                },
             },
             {
                 "kind": ResourceKind.VGPU.value,
@@ -292,7 +334,7 @@ def build_cross_layer_batches() -> list[dict[str, Any]]:
                 "name": "A10-0-1g",
                 "parentSourceId": "g0",
                 "status": "running",
-                "attributes": {"memQuotaBytes": 6 * 1024**3},
+                "attributes": {"memQuotaBytes": 6 * 1024**3, "origin": SIMULATED_ORIGIN},
             },
             {
                 "kind": ResourceKind.VM.value,
@@ -324,7 +366,10 @@ def build_cross_layer_batches() -> list[dict[str, Any]]:
                     "self_vgpu_memory_usage": 98,
                     "host_gpu_memory_usage": 98,
                 },
-                "raw": {},
+                # 平台层与 GPU 读数都是 B 构造的，如实标 `simulated`；
+                # 中间那份 `symptom` 是**成员 A 的真实样例回放**，不打标注
+                # （它自带 `probe` 语义），于是三份批次的来源在证据链上互不混淆。
+                "raw": {"origin": SIMULATED_ORIGIN},
             }
         ],
     }
@@ -363,7 +408,9 @@ def _batch(
         "batchId": batch_id or f"demo-{name}",
         "sentAt": moment.isoformat(),
         "resources": resources,
-        "events": events,
+        # 统一在**唯一的出口**打渠道标注，而不是在每个场景分支里各写一遍 ——
+        # 这个项目已经因为"同一概念两处定义"出过两次缺陷（见 `_batch` 的说明）。
+        "events": [_stamp_origin(dict(e), SIMULATED_ORIGIN) for e in events],
     }
 
 
@@ -376,6 +423,7 @@ def _event(
     severity: str | None = None,
     metrics: dict[str, Any] | None = None,
     message: str | None = None,
+    origin: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "occurredAt": at.isoformat(),
@@ -387,6 +435,9 @@ def _event(
         payload["severity"] = severity
     if message is not None:
         payload["message"] = message
+    if origin is not None:
+        # 渠道标注进 `raw`：`EventSource` 装不下"渠道"，而证据来源需要它。
+        payload["raw"] = {"origin": origin}
     return payload
 
 

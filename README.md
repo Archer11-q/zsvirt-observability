@@ -16,17 +16,19 @@
 > 仓库名保持 `zsvirt-observability`，以便按赛道关键词检索。
 >
 > **状态：实现阶段 —— 后端、探针、前端均已可运行。** 设计已定稿并完成**契约冻结**
-> （A、C 均签字，见 [docs/CONTRACT_FREEZE.md](docs/CONTRACT_FREEZE.md)）；后端 **16 个契约端点
-> 全部落地**，测试 **722 通过 / 1 跳过**（真实 PostgreSQL 上运行）。
+> （A、C 均签字，见 [docs/CONTRACT_FREEZE.md](docs/CONTRACT_FREEZE.md)）；后端 **18 个端点
+> 全部落地**，测试 **805 通过 / 1 跳过**（真实 PostgreSQL 上运行），ruff 全绿。
 >
 > **ZSvirt 平台侧已接入**：命题方确认测试环境的 ZWatch 查询能力已启用，GPU 指标渠道
 > （`app/zsvirt/watch.py`）与平台层命名空间桥接（`app/zsvirt/harvest.py`）已落地，
 > 平台资源以 `host:zsvirt:{uuid}` / `gpu:zsvirt:{serial}` 写入资源图。
 >
-> ⚠️ **尚未完成的交付项**：样例容器化 AI 工作负载、真实环境故障注入验证、3–5 分钟
-> 真实环境演示视频。清单与验收标准见
-> **[docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)**；
-> 尚未关闭的外部阻塞见 [docs/DECISIONS.md](docs/DECISIONS.md) §8（X-ID 清单）。
+> ⚠️ **尚未完成的交付项**：赛题交付要求 d（虚拟机内样例 AI 工作负载，配置已完成但未在
+> ZSvirt VM 内实跑）、e（三类故障场景，证据来自模拟 / 回放渠道）、g（真实环境演示视频）。
+> **逐项的差距、原因与补齐条件见 [docs/REQUIREMENTS_GAP.md](docs/REQUIREMENTS_GAP.md)**；
+> 未关闭的外部阻塞见 [docs/DECISIONS.md](docs/DECISIONS.md) §8（X-ID 清单）。
+>
+> 录制演示：[docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)（含旁白、时间轴与操作手册）。
 
 ## 文档
 
@@ -45,6 +47,8 @@
 | [docs/TEST_PLAN.md](docs/TEST_PLAN.md) | 测试分层、三类故障场景与验收闭环 |
 | [docs/EVENT_COVERAGE_MATRIX.md](docs/EVENT_COVERAGE_MATRIX.md) | **事件覆盖对账矩阵**（事件类型 → 告警规则 → 诊断规则，由代码生成） |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | **第三方依赖清单**（赛题交付要求 f） |
+| [docs/REQUIREMENTS_GAP.md](docs/REQUIREMENTS_GAP.md) | **交付要求 a–g 覆盖与缺口** —— 做到什么程度、缺的为什么缺、什么条件下能补 |
+| [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) | **演示与录制脚本** —— 时间轴、旁白、录制操作手册、常见提问 |
 | [docs/backend/BACKEND_DESIGN.md](docs/backend/BACKEND_DESIGN.md) | 后端模块设计 |
 | [docs/backend/DIAGNOSIS_DESIGN.md](docs/backend/DIAGNOSIS_DESIGN.md) | 诊断引擎与故障场景设计 |
 | [docs/ADR/](docs/ADR/) | 架构决策记录 |
@@ -94,14 +98,30 @@
 
 ### 数据来源的诚实标注
 
-赛题要求区分真实采集与模拟。本项目用 `origin` 字段在**类型层面**强制这一点
-（`docs/DATA_MODEL.md` §4.2.1），并通过 `/api/health` 的 `gpuProvider` 暴露：
+赛题要求区分真实采集与模拟。本项目在**两个层面**强制这一点，两套词表刻意不同：
 
-| `origin` | 含义 |
+**① 数据渠道**（`GET /api/health` → `components.gpuProvider.mode`，见 `docs/DATA_MODEL.md` §4.2.1）
+
+| 值 | 含义 |
 |---|---|
 | `zsvirt-zwatch` | ZWatch 平台指标（真实采集） |
-| `probe` | 虚拟机内探针采集（真实采集） |
+| `guest-smi` | 虚拟机内 `nvidia-smi`（真实采集） |
 | `simulated` | 模拟数据（**可识别，绝不伪装成真实采集**） |
+| `auto` | 未显式指定：有真实渠道就用真实渠道 |
+
+**② 证据来源**（每条诊断证据的 `source`，即 `DiagnosisEvidence.source`）
+
+| 值 | 含义 |
+|---|---|
+| `zwatch` / `zsvirt` | 平台侧真实采集 |
+| `probe` | 虚拟机内探针上报（**传输层事实**，也是认不出来时的回退值） |
+| `simulated` | 人工模拟载荷 |
+| `derived` | 由本系统自身推导（如时钟漂移计数） |
+
+为什么要有第二套：**结论的出处是证据**，只在仪表盘上标一句"数据为模拟"不足以
+让人判断某条根因能不能信。演示载荷在事件的 `raw.origin` 里带渠道标注，由
+`app/diagnosis/service.py::_evidence_source` 映射成证据 `source`；
+回归测试见 `tests/test_provenance.py`。
 
 此外，当前环境为 **GPU 直通**（非 vGPU 切分），平台侧没有按虚拟机维度的显存占用。
 读数因此标注 `attribution=passthrough` / `memUsageScope=card`：落进资源图的
@@ -119,6 +139,18 @@ export GPU_PROVIDER=simulated
 export SIMULATED_DATA_ENABLED=true
 ```
 
+**演示 / 录制请直接用一键脚本**，它会把上面两项与另外一项一起设好：
+
+```bash
+./deploy/start.sh --demo      # 演示基线 + 迁移 + 启动（不灌数据，故障现场注入）
+./deploy/start.sh --replay    # 演示基线 + 灌入全部场景并打印报告，不启动服务
+```
+
+`--demo` 额外把 `ALERT_RECOVERY_AFTER_SEC` 设为 `0`（关闭按墙钟的告警自动恢复）。
+理由：演示数据的时间基准是**固定的过去时刻**（为了可复现），而恢复判据拿墙钟去比，
+不关掉的话服务起来一个调度周期内所有告警都会变 `resolved`、`?state=firing` 返回空。
+真实部署应设成 `600`。详见 `docs/DEMO_SCRIPT.md` 的「复现性声明」。
+
 启动后 `GET /api/health` 的 `gpuProvider` 显示当前数据渠道（`zsvirt-zwatch` / `guest-smi` /
 `simulated` / `auto`）、**真实探活结果** `available`、认证方式 `authStyle` 与凭据是否就绪
 `credentialsConfigured`。读不到指标时它报 `available: false` 并给出缺口说明 ——
@@ -130,7 +162,7 @@ export SIMULATED_DATA_ENABLED=true
 
 ```bash
 cd backend && source .venv/bin/activate
-python -m pytest -q                       # 722 passed, 1 skipped
+python -m pytest -q                       # 805 passed, 1 skipped
 python -m uvicorn app.main:app --port 8080
 
 curl -s localhost:8080/api/health                       # 健康与降级状态

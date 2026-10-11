@@ -88,13 +88,20 @@ class ReconcileResult:
 
     resolved: list[str] = field(default_factory=list)
     checked: int = 0
+    #: 恢复步骤被**显式关闭**（`ALERT_RECOVERY_AFTER_SEC=0`）。
+    #: 与"窗口内没有需要恢复的告警"区分：前者是策略，后者是结果。
+    disabled: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         # `resolved` 保持**id 列表**而不是计数：调用方真正能用的是"哪几条被关了"。
         # 计数可由 `len()` 得到，反过来则不可逆 —— 与 `AlertEvaluation.as_dict`
         # 用 `created`/`updated` 表示计数的命名约定不同是有意的，那两者的字段名
         # 本身就写着"数量"。
-        return {"checked": self.checked, "resolved": list(self.resolved)}
+        return {
+            "checked": self.checked,
+            "resolved": list(self.resolved),
+            "disabled": self.disabled,
+        }
 
 
 # ---------------------------------------------------------------- 条件求值
@@ -403,10 +410,27 @@ def reconcile(
     "我在处理，先别叫我"。这条差异必须保留。
 
     **`acked` 会被恢复**：已确认不等于还在发生。若证据确实停了，它就该关掉。
+
+    **窗口 <= 0 表示关闭这一步**，而不是"窗口为 0 秒"。后者会让
+    `cutoff` 等于当前时刻，把所有告警一次关光 —— 效果与意图完全相反。
     """
     active_rules = rule_set or build_default_rule_set()
     moment = now or datetime.now(UTC)
     window = recovery_after if recovery_after is not None else active_rules.recovery_after
+    if window <= timedelta(0):
+        # **显式关闭恢复**，且必须在算 `cutoff` 之前返回。
+        #
+        # 直觉上"窗口设成 0 = 不恢复"，但按下面的公式 `cutoff = moment - 0`
+        # 就等于当前时刻，于是 `last_fired_at < cutoff` 对**每一条**告警都成立
+        # —— 一条不落地全部转 `resolved`，与意图正好相反。
+        #
+        # 什么时候需要关闭：`app.demo` 的演示数据时间基准是**固定的过去时刻**
+        # （见 `app/zsvirt/scenarios.py`，那是为了可复现），而恢复判据是拿
+        # 墙钟去比证据时间。于是演示数据一进库就已经"过期"：服务起来一个周期
+        # 之内所有告警都变 `resolved`，`GET /api/v1/alerts?state=firing` 返回空，
+        # 演示脚本里"三条告警指向同一个 diagnosisId"这一幕直接演不出来。
+        # 这是实测到的缺陷，理由与 `RESOURCE_STALE_AFTER_SEC=0` 完全相同。
+        return ReconcileResult(checked=0, disabled=True)
     cutoff = moment - window
 
     rows = list(

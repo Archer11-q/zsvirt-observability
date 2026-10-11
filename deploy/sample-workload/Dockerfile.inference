@@ -1,0 +1,76 @@
+# 样例容器化 AI 工作负载 —— 推理服务（赛题交付要求 d）
+#
+# ## 这份配置要满足什么
+#
+# 赛题交付要求 d：「在虚拟机中运行至少一种容器化 AI 工作负载，例如模型推理服务、
+# RAG 应用、Agent 服务或批处理任务；**提供完整配置**」。
+#
+# 本项目选**模型推理服务**，理由是它天然产生本平台要观测的三类信号：
+#   - 容器层：内存/CPU 限额、OOM、重启
+#   - 进程层：vLLM worker 的 I/O 等待、崩溃
+#   - 服务层：推理错误、超时、并发与 QPS
+# 而这三层正是赛题三类故障场景（容器/进程异常、GPU 或资源瓶颈、应用/Agent 异常）的载体。
+#
+# ## 为什么默认不装 GPU
+#
+# 演示机通常没有 GPU（`docs/DEMO_SCRIPT.md` 开头即声明这一点）。
+# 因此**默认配置是 CPU 可跑的极小模型**，GPU 是可选叠加。
+# 这让"缺 GPU 也能复现实验流程"（赛题明文要求）成为默认路径，而不是一句声明。
+#
+# ## 用法
+#
+#   docker build -t crosslayer/demo-inference:1.0 .
+#   docker run -d --name demo-inference \
+#     --memory=2g --memory-swap=2g \
+#     -p 8000:8000 \
+#     -v "$PWD/logs:/var/log/inference" \
+#     crosslayer/demo-inference:1.0
+#
+# 有 GPU 的机器加 `--gpus all`，并把 MODEL_NAME 换成更大的模型。
+# 备选：直接用官方镜像 `vllm/vllm-openai:latest`（体积大但省事），
+# 见 `compose.yaml` 里注释掉的另一种写法。
+
+FROM python:3.12-slim
+
+# 探针要读容器信息（cgroup / /proc），所以这些工具在镜像里可用会让观测更简单；
+# 不装也能跑（探针只需要 /proc，不需要容器内工具）。
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      curl procps ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 固定版本：演示要可复现（`ADR-0003`），浮动版本会让"同一场景两次结果不同"。
+# CPU 版 vLLM 较重，因此拆一层便于缓存；也可换 `transformers` + `fastapi` 的最小自建服务。
+RUN pip install --no-cache-dir \
+      "vllm==0.8.5" \
+      "fastapi==0.141.1" \
+      "uvicorn[standard]==0.53.0"
+
+# 极小模型：CPU 也能在秒级加载，适合演示与压力注入。
+# 生产/GPU 场景换成更大的模型即可（例如 Qwen2.5-7B-Instruct）。
+ENV MODEL_NAME="Qwen/Qwen2.5-0.5B-Instruct" \
+    VLLM_PORT=8000 \
+    HF_HOME=/models
+
+# 日志落在固定路径 —— 成员 A 的探针按路径采集 `inference.*` 事件，
+# 路径约定见 `agents/docs/EVENT_COVERAGE.md`（X-08 待命题方给规范）。
+ENV INFERENCE_LOG_DIR=/var/log/inference
+RUN mkdir -p "${INFERENCE_LOG_DIR}" "${HF_HOME}"
+
+EXPOSE 8000
+
+# 健康检查用推理服务自己的端点：容器"活着"不等于"能推理"，
+# 而本平台要观测的正是后者。
+HEALTHCHECK --interval=15s --timeout=5s --start-period=120s --retries=5 \
+  CMD curl -fsS "http://127.0.0.1:${VLLM_PORT}/health" || exit 1
+
+# `--max-model-len` 压小是为了让 CPU 演示也能在演示时长内响应；
+# `--swap-space 0` 避免把显存问题掩盖成内存交换。
+CMD ["sh", "-c", "exec python -m vllm.entrypoints.openai.api_server \
+      --model \"${MODEL_NAME}\" \
+      --host 0.0.0.0 \
+      --port \"${VLLM_PORT}\" \
+      --max-model-len 2048 \
+      --disable-log-requests 2>&1 | tee -a \"${INFERENCE_LOG_DIR}/server.log\""]

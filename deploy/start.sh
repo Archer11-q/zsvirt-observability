@@ -8,8 +8,13 @@
 #
 # 用法：
 #   ./deploy/start.sh                 # 迁移 + 启动服务（不灌数据）
-#   ./deploy/start.sh --with-demo     # 迁移 + 灌入三类场景 + 启动服务
-#   ./deploy/start.sh --replay        # 只灌数据并打印报告，不启动服务
+#   ./deploy/start.sh --demo          # 演示基线 + 迁移 + 启动（**录制演示用这个**）
+#   ./deploy/start.sh --with-demo     # 演示基线 + 迁移 + 灌入三类场景 + 启动
+#   ./deploy/start.sh --replay        # 演示基线 + 只灌数据并打印报告，不启动服务
+#
+# `--demo` 只改三个环境变量（见下方"演示基线"），不灌任何数据 ——
+# 演示时故障是**现场注入**的，预先把三类场景灌好会让后面的
+# `./deploy/inject_fault.sh <场景>` 变成幂等回放（batchId 固定），画面上什么都没发生。
 #
 set -euo pipefail
 
@@ -22,10 +27,12 @@ API_PORT="${API_PORT:-8080}"
 
 WITH_DEMO=0
 REPLAY_ONLY=0
+DEMO_MODE=0
 for arg in "$@"; do
   case "$arg" in
-    --with-demo) WITH_DEMO=1 ;;
-    --replay) REPLAY_ONLY=1; WITH_DEMO=1 ;;
+    --demo) DEMO_MODE=1 ;;
+    --with-demo) WITH_DEMO=1; DEMO_MODE=1 ;;
+    --replay) REPLAY_ONLY=1; WITH_DEMO=1; DEMO_MODE=1 ;;
     -h|--help)
       sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
@@ -35,6 +42,25 @@ for arg in "$@"; do
 done
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
+
+# ---------------------------------------------------------------- 演示基线
+#
+# 这三项**只影响演示/回放**，不改变 `.env.example` 里面向真实部署的默认值。
+# 每一项都对应一个实测到的缺陷（2026-09-30 在 8080 上跑完整演示路径时发现）：
+#
+# 1. `SIMULATED_DATA_ENABLED` / `GPU_PROVIDER`：演示机没有 GPU，数据由模拟渠道
+#    产生。不显式打开时 `GET /api/health` 会报 `mode=auto, simulated=false`，
+#    而演示脚本 §1 正是让评委看这个字段 —— **接口说了假话，比没有这个字段更糟**。
+# 2. `ALERT_RECOVERY_AFTER_SEC=0`：关闭按墙钟计算的告警自动恢复。演示数据的
+#    时间基准是固定的过去时刻（为了可复现），恢复判据拿墙钟一比就"过期"，
+#    于是服务起来一个周期内全部告警变 `resolved`、`?state=firing` 返回空。
+#    理由与 `RESOURCE_STALE_AFTER_SEC=0` 完全相同，见 `backend/app/config.py`。
+if [[ "${DEMO_MODE}" -eq 1 ]]; then
+  export SIMULATED_DATA_ENABLED="${SIMULATED_DATA_ENABLED:-true}"
+  export GPU_PROVIDER="${GPU_PROVIDER:-simulated}"
+  export ALERT_RECOVERY_AFTER_SEC="${ALERT_RECOVERY_AFTER_SEC:-0}"
+  printf '\033[2m演示基线：SIMULATED_DATA_ENABLED=true  GPU_PROVIDER=simulated  ALERT_RECOVERY_AFTER_SEC=0\033[0m\n'
+fi
 fail() { printf '\n\033[31m✗ %s\033[0m\n' "$1" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 1. 依赖检查

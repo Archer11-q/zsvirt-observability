@@ -253,6 +253,11 @@ class PeriodicTasks:
 
         与资源生命周期**分开跑**，而不是合成一个任务：两者的失败原因不同
         （数据库 vs 逻辑），合在一起会让"哪个坏了"变得看不清。
+
+        `ALERT_RECOVERY_AFTER_SEC=0` 时**自动恢复**被关闭（`reconcile` 会如实
+        报告 `disabled=True`），但**静默到期释放仍然生效** —— 两者是独立的两步，
+        关掉前者不能顺手把后者也关掉（那正是"静默偷偷变成自动关单"的反面：
+        静默永不释放）。
         """
         cfg = self._settings or get_settings()
         with session_scope() as session:
@@ -273,9 +278,6 @@ class PeriodicTasks:
                 else None
             )
         return {"stale": stale, "gone": gone}
-
-    def _recovery_after(self) -> Any:
-        return (self._settings or get_settings()).alert_recovery_after
 
 
 def build_periodic_tasks(settings: Settings | None = None) -> PeriodicTasks | None:
