@@ -119,46 +119,22 @@ class ContainerCollector(Collector):
         self._last_event_time = int(time.time())
         # sourceId -> 首次观察时间（firstSeenAt）
         self._first_seen: dict[str, str] = {}
+        # sourceId -> 最近一次 inspect 到的 restartCount（缓存，避免每轮都 inspect）
+        self._restart_count: dict[str, int] = {}
 
     def collect(self) -> tuple[list[Resource], list[Event]]:
         resources: list[Resource] = []
         events: list[Event] = []
-        now = utc_now_ms()
+        now_ms = utc_now_ms()
 
-        containers = self._client.list_containers()
-        for c in containers:
-            cid = c.get("Id", "")
-            source_id = cid[:12]
-            name = (c.get("Names") or ["unknown"])[0].lstrip("/")
-            state = c.get("State", "unknown")
-            status = "running" if state == "running" else (
-                "error" if state in ("dead", "restarting") else "stopped"
-            )
-            attributes: dict[str, Any] = {
-                "image": c.get("Image", ""),
-                "runtime": "docker",
-            }
-            # restartCount 只在 inspect（/containers/<id>/json）；失败或缺失时不报
-            # 错值（缺字段比"重启 0 次"更诚实 —— 缺陷 4）。
-            info = self._client.inspect(cid) if cid else None
-            if info and "RestartCount" in info:
-                attributes["restartCount"] = info["RestartCount"]
-            first_seen = self._first_seen.setdefault(source_id, now)
-            resources.append(
-                Resource(
-                    kind="container",
-                    source_id=source_id,
-                    name=name,
-                    status=status,
-                    attributes=attributes,
-                    first_seen_at=first_seen,
-                    last_seen_at=now,
-                )
-            )
+        # 先取事件：顺带收集「发生 restart 的容器」，用于驱动 restartCount 缓存刷新
+        # （restartCount 单调递增，只在 restart 事件后变化，无需每轮 inspect —— 缺陷 4 的性能优化）。
+        ts = int(time.time())
+        ev_list = self._client.events(self._last_event_time, ts)
+        self._last_event_time = ts
+        restarted: set[str] = set()
 
-        # 事件：轮询 since..until 窗口，取 oom / restart
-        now = int(time.time())
-        for ev in self._client.events(self._last_event_time, now):
+        for ev in ev_list:
             etype = ev.get("Action", "")
             actor = ev.get("Actor") or {}
             eid = actor.get("Attributes", {}).get("name", "")
@@ -177,6 +153,7 @@ class ContainerCollector(Collector):
                     )
                 )
             elif etype == "restart":
+                restarted.add(source_id)
                 events.append(
                     Event(
                         type="container.restart",
@@ -187,5 +164,38 @@ class ContainerCollector(Collector):
                         raw=ev,
                     )
                 )
-        self._last_event_time = now
+
+        for c in self._client.list_containers():
+            cid = c.get("Id", "")
+            source_id = cid[:12]
+            name = (c.get("Names") or ["unknown"])[0].lstrip("/")
+            state = c.get("State", "unknown")
+            status = "running" if state == "running" else (
+                "error" if state in ("dead", "restarting") else "stopped"
+            )
+            attributes: dict[str, Any] = {
+                "image": c.get("Image", ""),
+                "runtime": "docker",
+            }
+            # restartCount 只在「首次」或「发生 restart」时 inspect 刷新；
+            # 失败/缺失时不报 0 错值（缺字段比「重启 0 次」更诚实 —— 缺陷 4）。
+            if source_id in restarted or source_id not in self._restart_count:
+                info = self._client.inspect(cid) if cid else None
+                if info and "RestartCount" in info:
+                    self._restart_count[source_id] = info["RestartCount"]
+            if source_id in self._restart_count:
+                attributes["restartCount"] = self._restart_count[source_id]
+            first_seen = self._first_seen.setdefault(source_id, now_ms)
+            resources.append(
+                Resource(
+                    kind="container",
+                    source_id=source_id,
+                    name=name,
+                    status=status,
+                    attributes=attributes,
+                    first_seen_at=first_seen,
+                    last_seen_at=now_ms,
+                )
+            )
+
         return resources, events

@@ -159,6 +159,31 @@ class TestContainerCollectorRestartCount(unittest.TestCase):
         resources = self._collect([CONTAINER_JSON], None)
         self.assertNotIn("restartCount", resources[0].attributes)
 
+    def test_restart_count_refreshed_after_restart_event(self):
+        """缓存：restartCount 首次 inspect，restart 事件后刷新，其余轮复用缓存。"""
+        c = ContainerCollector()
+        c._client = mock.Mock()
+        c._client.list_containers.return_value = [CONTAINER_JSON]
+        c._client.inspect.return_value = INSPECT_JSON  # RestartCount=14
+
+        # 第一轮：无 restart 事件，首次 inspect 拿 14
+        c._client.events.return_value = []
+        resources, _ = c.collect()
+        self.assertEqual(resources[0].attributes["restartCount"], 14)
+        self.assertEqual(c._client.inspect.call_count, 1)
+
+        # 第二轮：仍无 restart 事件，复用缓存，不再 inspect
+        resources, _ = c.collect()
+        self.assertEqual(resources[0].attributes["restartCount"], 14)
+        self.assertEqual(c._client.inspect.call_count, 1)
+
+        # 第三轮：发生 restart 事件 → 触发刷新，inspect 拿到 15
+        c._client.events.return_value = [EVENT_RESTART]
+        c._client.inspect.return_value = {**INSPECT_JSON, "RestartCount": 15}
+        resources, _ = c.collect()
+        self.assertEqual(resources[0].attributes["restartCount"], 15)
+        self.assertEqual(c._client.inspect.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
