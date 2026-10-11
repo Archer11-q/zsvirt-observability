@@ -155,17 +155,25 @@ Crosslayer 侧的结论：
 `agents/probe/collector/container.py::ContainerCollector` 负责发现与映射，
 `agents/probe/reporter.py::build_batch` / `Reporter` 负责组装与上报。
 
-它只做三件事，**每一件都对应 A 的采集器的一个缺陷**：
+**A 的采集器缺陷已修复**（`fb61f4d` / `8dd34e4`），本脚本里曾经用于绕过它们的三处
+补丁**已全部删除** —— 现在跑的就是 A 的原始实现。实测验证：
 
-| 本脚本的动作 | 对应的缺陷 | 为什么先放在这里 |
-|---|---|---|
-| `NativeDockerClient.events()` 自己发请求 + 逐行解析 NDJSON | A 的 `events()` 有两个独立缺陷：`filters` 未 URL 编码（抛 `InvalidURL` 被吞）、`_get` 用 `json.loads` 解析 NDJSON 流（抛 `JSONDecodeError` 被吞） | 不修就一条事件都收不到 |
-| `repair_event_targets()` 用 `Actor.ID[:12]` 补回资源指向 | A 读的是 `ev["id"]`，而 Engine API 的容器 ID 在 `Actor.ID`，于是每条事件的资源指向都是空串 | 空串事件关联不到任何资源 |
-| `inspect_containers()` 补齐 `restartCount` 等指标 | A 从 `/containers/json` 读 `RestartCount`，而该响应没有这个字段 → **恒为 0** | "重启 14 次"显示成"从未重启"是最容易被当成没问题的那种错值 |
+```
+采集通道：原生 unix socket（成员 A 的原始实现）
+container.oom_killed  source_id='7113614be8e2'  ✓ 非空
+demo-inference-starved  status=error  restartCount=8   ← 不再是 0
+```
 
-**完整复现步骤、四条缺陷的定位过程与建议修法见
-[`docs/PROBE_DEFECT_SYNC.md`](../../docs/PROBE_DEFECT_SYNC.md)。**
-修好之后，本脚本里这三段都可以删掉 —— **它们的存在本身就是待办事项**。
+本脚本现在只做三件 A 的采集器**设计上不做**的事（都不是缺陷）：
+
+| 本脚本的动作 | 为什么 |
+|---|---|
+| 按名字前缀收敛观测范围（`--filter-name`，默认 `demo-`） | A 的采集器会列出**整台机器所有容器**（实测把无关的 grafana / mysql 一起报上来）。探针在 ZSvirt 虚拟机里这是对的（那台 VM 上就该只有被测负载），开发机上会把资源图冲淡 |
+| 补一条宿主 VM 资源当父节点 | A 的采集器**不声称 VM 权威**（设计如此）。没有父节点，容器在图上就是孤立的 |
+| 补 `exitCode` / `oomKilledCount` / `container_memory_limit_bytes` | 运行时**真实暴露**但 A 尚未上报。**可选增强**：用 `--no-enrich` 实测结论完全相同（`CONTAINER_MEMORY_LIMIT` / 0.9），所以它不是前置条件，只是把"限额 512 MiB"这个证据也摆到屏幕上 |
+
+缺陷的完整定位过程见 [`docs/PROBE_DEFECT_SYNC.md`](../../docs/PROBE_DEFECT_SYNC.md) ——
+值得一读的原因是：**四条缺陷全都单测绿、日志静默、上报成功，只是事件数恒为 0。**
 
 > 附：本脚本的采集通道会**优先走 `/var/run/docker.sock`**（即 A 的原始代码路径）；
 > 只有在 socket 不存在时才退回 `docker` 命令行的替身实现。

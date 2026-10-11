@@ -1,5 +1,30 @@
 # 探针容器采集器缺陷同步单（给成员 A）
 
+> ## ✅ 已修复并验证（2026-09-30 收口）
+>
+> 成员 A 在 `fb61f4d`（四条缺陷）与 `8dd34e4`（restartCount 缓存）修复，
+> 并新增 `agents/probe/tests/test_container_collector.py`（189 行）。
+>
+> **B 侧实测验证通过**（直接在 WSL 里跑 A 的 `ContainerCollector`，不经任何桥接层）：
+>
+> ```
+> [1] 资源=6 事件=1 {'container.oom_killed': 1}
+> [5] 资源=6 事件=1 {'container.oom_killed': 1}
+> container.oom_killed  source_id='7113614be8e2'  ✓ 非空
+> demo-inference-starved  status=error  restartCount=8   ← 不再是 0
+> 四条缺陷判定: ✓ 全部修复
+> ```
+>
+> 端到端：告警 `R-CTR-OOM-010` firing、根因 `CONTAINER_MEMORY_LIMIT` 置信 **0.9**、
+> 建议 `INCREASE_CONTAINER_MEMORY`，证据 `source=probe`（真实采集）。
+>
+> **并且实测确认：A 的原始输出已经足够** —— 用 `--no-enrich`（完全不补任何指标）
+> 跑，结论同样是 `CONTAINER_MEMORY_LIMIT` / 0.9 / 同一个建议。
+> 所以本单下面提到的"桥接层补指标"只是**可选增强**，不是前置条件。
+>
+> 本文件保留完整定位过程，作为"这类缺陷怎么被发现"的记录 ——
+> 它的价值在于：**四条缺陷全都单测绿、日志静默、上报成功，只是事件数恒为 0。**
+
 > **结论先说**：`agents/probe/collector/container.py` 的 `ContainerCollector`
 > **永远采集不到任何容器事件**。不是偶尔失败、不是权限问题 —— 是四条独立缺陷叠加，
 > 且**全部被静默吞掉**，所以单测全绿、日志无异常、上报也成功，只是事件数恒为 0。
