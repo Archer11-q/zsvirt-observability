@@ -28,7 +28,6 @@
 > **逐项的差距、原因与补齐条件见 [docs/REQUIREMENTS_GAP.md](docs/REQUIREMENTS_GAP.md)**；
 > 未关闭的外部阻塞见 [docs/DECISIONS.md](docs/DECISIONS.md) §8（X-ID 清单）。
 >
-> 演示录制脚本随交付物**单独提供，不入库** —— 仓库只保留源码与相关文档。
 
 ## 文档
 
