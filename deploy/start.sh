@@ -50,7 +50,13 @@ if [[ ! -f "${BACKEND}/.env" ]]; then
   （.env 被 .gitignore 排除，凭据不入仓库）"
 fi
 
-"${VENV_PY}" - <<'PY' || exit 1
+# 必须在 backend/ 下执行：下面第一行就是 `sys.path.insert(0, ".")`，
+# 而 `app` 包位于 backend/。脚本其余两处 Python 调用（迁移、灌数据）都用了
+# `(cd "${BACKEND}" && ...)`，这里早先漏了 —— 后果是**按演示脚本的第一条命令
+# 就会拿到 ModuleNotFoundError**，而那是评委看到的第一屏。
+(
+  cd "${BACKEND}" || exit 1
+  "${VENV_PY}" - <<'PY'
 import sys
 sys.path.insert(0, ".")
 from app.config import get_settings
@@ -65,6 +71,7 @@ if not ok:
 print(f"  数据库连接正常（{settings.database_url.rsplit('@', 1)[-1]}）")
 print(f"  GPU 数据渠道：{settings.gpu_provider_mode}")
 PY
+) || exit 1
 
 # ---------------------------------------------------------------- 2. 迁移
 
