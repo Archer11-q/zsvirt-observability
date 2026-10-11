@@ -41,6 +41,7 @@ const BUILD = join(HERE, "build");
 const CLIPS = join(BUILD, "clips");
 const OVERLAYS = join(BUILD, "overlays");
 const OUT = join(HERE, "out");
+const RAW_DIR = join(HERE, "raw");
 
 const FFMPEG = require("@ffmpeg-installer/ffmpeg").path;
 const FFPROBE = require("@ffprobe-installer/ffprobe").path;
@@ -68,7 +69,36 @@ function probeDuration(file) {
 function timeline() {
   const p = join(HERE, "timeline.json");
   if (!existsSync(p)) throw new Error("缺少 timeline.json —— 从 timeline.example.json 复制一份。");
-  return JSON.parse(readFileSync(p, "utf8"));
+  // 去 BOM：这个文件要在 Windows 上手工编辑，而 PowerShell / 记事本的
+  // "UTF-8" 会写 BOM，JSON.parse 遇到它抛的错看起来像花括号写错了。
+  const tl = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
+
+  /* 录屏段的 in/out **自动取自录制产物**，不靠人手抄。
+   *
+   * `record/record.mjs` 录完会把每段在原始时间轴上的位置写进
+   * `build/segments.json`。这里若发现它就用它覆盖 timeline.json 的 `source` ——
+   * 手工抄秒数是这个项目反复出问题的那类步骤：抄错一位，成片里就会
+   * "命令还没敲完就切走"，而所有日志都是正常的。
+   *
+   * 想手工指定（例如多次录制混用素材），把 `build/segments.json` 删掉即可。 */
+  const auto = join(BUILD, "segments.json");
+  if (existsSync(auto)) {
+    const recorded = JSON.parse(readFileSync(auto, "utf8").replace(/^\uFEFF/, ""));
+    const byId = new Map(recorded.timeline.map((t) => [t.id, t]));
+    let applied = 0;
+    for (const clip of tl.clips ?? []) {
+      const seg = byId.get(clip.id);
+      if (!seg) continue;
+      clip.source = { in: seg.in, out: seg.out };
+      applied++;
+    }
+    if (applied) {
+      tl.recording = join(RAW_DIR, "recording.mp4");
+      console.log(`时间轴：自动取用 build/segments.json 的 ${applied} 段切点（录屏总长 ${recorded.total.toFixed(1)}s）`);
+    }
+  }
+
+  return tl;
 }
 
 function seqDir(id) {
